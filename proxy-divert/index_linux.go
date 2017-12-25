@@ -18,7 +18,7 @@ import (
   "github.com/google/gopacket/layers"
 
   "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/nettools"
-  "github.com/ilyaigpetrov/ezuba-tcp-porxy-client/proxy-divert/vendor-local/freeport"
+  "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/proxy-divert/vendor-local/freeport"
 )
 
 var errlog = log.New(os.Stderr,
