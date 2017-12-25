@@ -14,9 +14,12 @@ import (
   "io"
   "encoding/hex"
   "net"
-  "os/signal"
 
   "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/nettools"
+  "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/at-fire"
+
+  "github.com/google/gopacket/pcapgo"
+  "github.com/google/gopacket/layers"
 )
 
 var errlog = log.New(os.Stderr,
@@ -55,7 +58,7 @@ func keepHandlingReply() {
         }
         break
       }
-      xor42(tmp)
+      xor42(tmp[:n])
       buf = append(buf, tmp[:n]...)
       fmt.Println("RECEIVED:", hex.EncodeToString(buf))
 
@@ -78,7 +81,7 @@ func keepHandlingReply() {
 
       fmt.Println(hex.EncodeToString(packetData))
 
-      _, ip, tcp, _, err := nettools.ParseTCPPacket(packetData)
+      packet, ip, tcp, _, err := nettools.ParseTCPPacket(packetData)
       if err != nil {
         panic(err)
       }
@@ -87,6 +90,7 @@ func keepHandlingReply() {
       fmt.Println(hex.Dump(packetData))
 
       injectPacket(packetData)
+      pcapWriter.WritePacket(packet.Metadata().CaptureInfo, packet.Data())
 
       buf = buf[header.TotalLen:]
     }
@@ -139,12 +143,13 @@ func packetHandler(packetData []byte) {
     return
   }
 
-  _, ip, tcp, _, err := nettools.ParseTCPPacket(packetData)
+  packet, ip, tcp, _, err := nettools.ParseTCPPacket(packetData)
   if err != nil {
     errlog.Println(err)
     return
   }
   fmt.Printf("Sending from %s:%d to %s:%d\n", ip.SrcIP, tcp.SrcPort, ip.DstIP, tcp.DstPort)
+  pcapWriter.WritePacket(packet.Metadata().CaptureInfo, packet.Data())
 
   _, err = io.Copy(remote, bytes.NewReader(packetData))
   if err != nil {
@@ -153,6 +158,8 @@ func packetHandler(packetData []byte) {
   }
 
 }
+
+var pcapWriter *pcapgo.Writer
 
 func main() {
 
@@ -166,6 +173,13 @@ func main() {
     fmt.Printf("Usage: %s proxy_address:port\n", filepath.Base(os.Args[0]))
     os.Exit(1)
   }
+
+
+  snapshotLen := uint32(65535)
+  f, _ := os.Create("test.pcap")
+  pcapWriter := pcapgo.NewWriter(f)
+  pcapWriter.WriteFileHeader(snapshotLen, layers.LinkTypeIPv4)
+  defer f.Close()
 
   serverAddr := os.Args[1]
 
@@ -181,14 +195,8 @@ func main() {
 
   fmt.Println("Traffic diverted.")
 
-  controlC := make(chan os.Signal)
-  signal.Notify(controlC, os.Interrupt)
-  go func(){
-    <-controlC
-    unsub()
-    Info.Println("Exiting after Ctrl+C")
-    os.Exit(0)
-  }()
-  select{}
+  exitChan := atFire.GetFireSignalsChannel()
+  <-exitChan
+  // all deffereds executed here
 
 }

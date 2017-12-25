@@ -15,7 +15,7 @@
 
 [[projects]]
   name = "github.com/google/gopacket"
-  packages = [".","layers"]
+  packages = [".","layers","pcapgo"]
   revision = "11c65f1ca9081dfea43b4f9643f5c155583b73ba"
   version = "v1.1.14"
 
@@ -40,6 +40,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "f01c94252ef7336e6e321e5ccb83d5b6d2353131756a3e938d82d3eb9e65c631"
+  inputs-digest = "118dadaa587a1d94ddaf13f5b19b14f395e5cf50f00cf95e35ccbfe776f2534a"
   solver-name = "gps-cdcl"
   solver-version = 1

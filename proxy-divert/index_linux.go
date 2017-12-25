@@ -5,9 +5,8 @@ import (
   "log"
   "math"
   "os"
-  "os/signal"
   "fmt"
-  "golang.org/x/net/ipv4"
+  //"golang.org/x/net/ipv4"
   "github.com/coreos/go-iptables/iptables"
   "syscall"
   //"errors"
@@ -18,6 +17,7 @@ import (
   "github.com/google/gopacket/layers"
 
   "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/nettools"
+  "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/at-fire"
   "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/proxy-divert/vendor-local/freeport"
 )
 
@@ -40,7 +40,7 @@ var PORT_TO_DST = make(map[uint16]realAddr)
 
 var noop = func() {}
 
-func sendViaSocket(packetData []byte, toIP net.IP) error {
+func sendViaSocket(packetData []byte, toIP net.IP, port int) error {
 
   s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_RAW)
   if err != nil {
@@ -52,6 +52,7 @@ func sendViaSocket(packetData []byte, toIP net.IP) error {
   copy(arr[:], toIP.To4()[:4])
   addr := syscall.SockaddrInet4{
     Addr: arr,
+    Port: port,
   }
   return syscall.Sendto(s, packetData, 0, &addr)
 
@@ -112,7 +113,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
         defer delete(PORT_TO_DST, freePort)
 
 
-        s, err := syscall.Socket(syscall.AF_INET , syscall.SOCK_STREAM , 0)
+        s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM , 0)
         if err != nil {
           errlog.Println(err)
           return
@@ -210,12 +211,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
 
           if (ip.SrcIP.Equal(rlyIP)) {
             // It's reply from target, inbound packet
-            if len(tcp.Payload) > 0 {
-              _, err = rly.connection.Write(tcp.Payload)
-              if err != nil {
-                errlog.Println(err)
-              }
-            }
+            // Already injected.
             continue
           } else {
             ip.DstIP = rlyIP
@@ -252,25 +248,41 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
 
   injectPacket = func(packetData []byte) error {
 
-    _, _, tcp, _, err := nettools.ParseTCPPacket(packetData)
+    _, ip, tcp, _, err := nettools.ParseTCPPacket(packetData)
     if err != nil {
       return err
     }
 
+    /*
     header, err := ipv4.ParseHeader(packetData)
     if err != nil {
       errlog.Println(err)
       return err
     }
     fmt.Printf("Inject (via socket): %s:%s to %s:%d\n", header.Src.String(), tcp.SrcPort, header.Dst.String(), tcp.DstPort)
+    */
 
     //_, _, err = ipConn.WriteMsgIP(packetData, []byte{}, &net.IPAddr{IP: header.Dst})
 
-    err = sendViaSocket(packetData, header.Dst)
-    if err != nil {
-      errlog.Println(err)
-      return err
+    rly, ok := PORT_TO_DST[uint16(tcp.DstPort)]
+    if !ok {
+      fmt.Printf("%s:%d not in ports\n", ip.DstIP.String(), tcp.DstPort)
+      os.Exit(1)
     }
+
+    if len(tcp.Payload) > 0 {
+      _, err = rly.connection.Write(tcp.Payload)
+      if err != nil {
+        errlog.Println(err)
+      }
+    } else {
+      err = sendViaSocket(packetData, ip.DstIP, int(tcp.DstPort))
+      if err != nil {
+        errlog.Println(err)
+        return err
+      }
+    }
+
     return nil
 
   }
@@ -312,17 +324,9 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
     return nil, nil, err
   }
 
-  c := make(chan os.Signal, 1)
-  signal.Notify(c,
-    // https://www.gnu.org/software/libc/manual/html_node/Termination-Signals.html
-    syscall.SIGTERM, // "the normal way to politely ask a program to terminate"
-    syscall.SIGINT, // Ctrl+C
-    syscall.SIGQUIT, // Ctrl-\
-    syscall.SIGKILL, // "always fatal", "SIGKILL and SIGSTOP may not be caught by a program"
-    syscall.SIGHUP, // "terminal is disconnected"
-  )
+  fire := atFire.GetFireSignalsChannel()
   go func(){
-    for _ = range c {
+    for _ = range fire {
       unsub()
       fmt.Println("Exiting after signal.")
     }
