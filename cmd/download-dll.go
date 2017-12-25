@@ -1,3 +1,5 @@
+// https://github.com/clmul/go-windivert/blob/cbf64dc7130204acec0b51037a44f6fd21bc1505/tool/downloadDLL.go
+// BSD 2-clause "Simplified" License
 package main
 
 import (
