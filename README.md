@@ -1,8 +1,9 @@
 # Ezuba TCP Proxy Client
 
-Platforms: Linux, Windows
+Platforms: Linux, Windows  
+Proxy server: https://github.com/ilyaigpetrov/ezuba-tcp-proxy-server
 
-## How To Develop It
+## How To Develop
 
 1. `go run ./cmd/download-dll.go` will download [WinDivert] dlls for Windows
 2. `go build`
