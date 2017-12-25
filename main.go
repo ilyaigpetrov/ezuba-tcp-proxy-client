@@ -27,6 +27,13 @@ var Info = log.New(os.Stdout,
     "INFO: ",
     log.Ldate|log.Ltime|log.Lshortfile)
 
+func xor42(data []byte) []byte {
+  for i, b := range data {
+    data[i] = b ^ 42
+  }
+  return data
+}
+
 var remote net.Conn
 var isDisconnected = make(chan struct{})
 var isConnected = make(chan struct{}, 1)
@@ -48,6 +55,7 @@ func keepHandlingReply() {
         }
         break
       }
+      xor42(tmp)
       buf = append(buf, tmp[:n]...)
       fmt.Println("RECEIVED:", hex.EncodeToString(buf))
 
@@ -167,6 +175,7 @@ func main() {
   if err != nil {
     errlog.Fatal(err)
   }
+  defer unsub()
 
   go keepConnectedTo(serverAddr)
 
