@@ -2,7 +2,7 @@ package main
 
 import (
 
-  "githab.com/ilyaigpetrov/ezuba-tcp-proxy-client/proxy-divert"
+  "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/proxy-divert"
   "golang.org/x/net/ipv4"
   "path/filepath"
   "fmt"
@@ -16,7 +16,7 @@ import (
   "net"
   "os/signal"
 
-  "githab.com/ilyaigpetrov/ezuba-tcp-proxy-client/nettools"
+  "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/nettools"
 )
 
 var errlog = log.New(os.Stderr,

@@ -1,7 +1,7 @@
 package main
 
 import (
-  "githab.com/ilyaigpetrov/ezuba-tcp-proxy-client/proxy-divert"
+  "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/proxy-divert"
 
   "fmt"
   "log"
