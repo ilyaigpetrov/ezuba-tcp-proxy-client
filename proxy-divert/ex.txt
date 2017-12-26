@@ -1,0 +1,5 @@
+The source IP address is 192.168.1.90
+The destination IP address is 127.0.0.1
+Source port: 51884
+Dest port: 2222
+
