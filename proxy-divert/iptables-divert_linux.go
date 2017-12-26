@@ -4,14 +4,21 @@ package main
 import "C"
 import (
   "errors"
-  "fmt"
-  "net"
-  "encoding/binary"
-  //"github.com/ilyaigpetrov/ezuba-tcp-proxy-client/nettools"
+  "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/nettools"
   "os"
   "os/signal"
   "syscall"
+  "log"
+  "fmt"
 )
+
+var errlog = log.New(
+  os.Stderr,
+  "ERROR: ",
+  log.Lshortfile,
+)
+
+var internalIP = "127.0.0.5"
 
 func getFireSignalsChannel() chan os.Signal {
 
@@ -40,43 +47,84 @@ func toErr(msg *C.char) error {
   return errors.New(C.GoString(msg))
 }
 
-func int2ip(nn uint32) net.IP {
-  ip := make(net.IP, 4)
-  binary.BigEndian.PutUint32(ip, nn)
-  return ip
+var maxIpPacketSize = 65535
+var packetBuffer = make([]byte, maxIpPacketSize)
+
+func receive(s C.int) ([]byte, error) {
+
+  ptr := C.CBytes(packetBuffer)
+  n := int(C.recv(s, ptr, C.size_t(len(packetBuffer)), 0));
+  if n < 0 {
+    return []byte{}, toErr(C.getLastErrorMessage())
+  }
+  result := C.GoBytes(ptr, C.int(n))
+  return result, nil
+
 }
+
+func write(s C.int, data []byte) (int, error) {
+
+  n := C.write(s, C.CBytes(data), C.size_t(len(data)))
+  if n < 0 {
+    return 0, toErr(C.getLastErrorMessage())
+  }
+  return int(n), nil
+
+}
+
+type realAddr struct {
+  ip string
+  port uint16
+  clientSocket C.int
+}
+
+var PORT_TO_DST = make(map[uint16]realAddr)
 
 func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) /*(unsub func() error, injectPacket func([]byte) error)*/ (err error) {
 
   result := C.createTcpRawSocket()
   if result.error != nil {
     err = toErr(result.error)
+    errlog.Println(err)
     return
   }
   rawSocket := result.socket
-  defer C.close(rawSocket)
   go func(){
 
-    maxIpPacketSize := 65535;
+    defer C.close(rawSocket)
     for {
-      packetData := make([]byte, maxIpPacketSize)
-      n := int(C.recv(rawSocket, C.CBytes(packetData), C.size_t(maxIpPacketSize), 0));
-      if (n > 0) {
-        packetHandler(packetData[:n])
+      packetData, err := receive(rawSocket)
+      if err != nil {
+        errlog.Println(err)
+        break
       }
+
+      _, ip, tcp, _, err := nettools.ParseTCPPacket(packetData)
+      if err != nil {
+        // errlog.Println(err)
+        continue
+      }
+      if ip.DstIP.String() != internalIP {
+        continue
+      }
+      fmt.Printf("Internal: Packet from %s:%d to %s:%d\n", ip.SrcIP.String(), tcp.SrcPort, ip.DstIP.String(), tcp.DstPort)
+      packetHandler(packetData)
+
     }
 
   }()
 
-  result = C.createTcpListeningSocket(2222);
+  result = C.createTcpListeningSocket(C.INADDR_ANY, 2222);
   if result.error != nil {
     err = toErr(result.error)
+    errlog.Println(err)
     return
   }
   iptSocket := result.socket
-  defer C.close(iptSocket)
+
   go func(){
 
+    defer C.close(iptSocket)
     for {
       /*
       typedef struct {
@@ -87,16 +135,60 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) /
       */
       conn := C.acceptTcpSocket(iptSocket);
       if conn.error != nil {
-        fmt.Println("Can't accept:", toErr(conn.error))
-        exit()
-        return
+        err := toErr(conn.error)
+        errlog.Println("Can't accept:", err)
+        continue
       }
 
       sin := conn.sockaddr;
-      //C.printf("Packet from %s:%d\n", C.inet_ntoa(sin.sin_addr), C.ntohs(sin.sin_port));
+      originalIP := C.GoString(C.inet_ntoa(sin.sin_addr))
+      originalPort := uint16(sin.sin_port)
+      clientSocket := conn.clientSocket
+      go func(){
 
-      ip := C.inet_ntoa(sin.sin_addr)
-      fmt.Printf("Accepted from %s:%d\n", ip, int(sin.sin_port))
+        defer C.close(clientSocket)
+        num := C.getdestaddrIptables(clientSocket, &sin);
+        if (num != 0) {
+          err := toErr(C.getLastErrorMessage())
+          errlog.Println(err)
+          return
+        }
+        realIP := C.GoString(C.inet_ntoa(sin.sin_addr))
+        realPort := uint16(sin.sin_port)
+        fmt.Printf("Accepted connection from %s:%d to %s:%d\n", originalIP, originalPort, realIP, realPort)
+
+        PORT_TO_DST[originalPort] = realAddr{
+          ip: realIP,
+          port: realPort,
+          clientSocket: clientSocket,
+        }
+
+        defer delete(PORT_TO_DST, originalPort)
+        result = C.createTcpConnectingSocket(C.CString(internalIP))
+        if result.error != nil {
+          err = toErr(result.error)
+          errlog.Println(err)
+          return
+        }
+        internalSocket := result.socket;
+
+        defer C.close(internalSocket)
+        for {
+          packetData := make([]byte, maxIpPacketSize)
+          fmt.Println("Reading from client socket...")
+          packetData, err := receive(clientSocket)
+          if err != nil {
+            errlog.Println(err)
+            break
+          }
+          fmt.Printf("Read %d bytes, writing to internal socket.\n", len(packetData))
+          _, err = write(internalSocket, packetData)
+          if err != nil {
+            errlog.Println(err)
+            break
+          }
+        }
+      }()
     }
 
   }()
