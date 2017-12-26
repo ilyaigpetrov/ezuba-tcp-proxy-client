@@ -6,13 +6,18 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h> // inet_ntoa
 #include <linux/netfilter_ipv4.h>
+#include <unistd.h> // close(sock)
 
 typedef struct {
   char* error;
   int socket;
 } SOCKET;
 
-SOCKET createTcpSocket() {
+char* getLastErrorMessage() {
+  return strerror(errno);
+}
+
+SOCKET createTcpRawSocket() {
 
   SOCKET result;
   result.error = NULL;
@@ -20,10 +25,84 @@ SOCKET createTcpSocket() {
   int s = socket (PF_INET, SOCK_RAW, IPPROTO_TCP);
   if(s == -1)
   {
-    result.error = strerror(errno);
+    result.error = getLastErrorMessage();
     return result;
   }
   result.socket = s;
+  return result;
+
+}
+
+static int getdestaddrIptables(int fd, struct sockaddr_in *destaddr)
+{
+  socklen_t socklen = sizeof(*destaddr);
+  int error;
+
+  error = getsockopt(fd, SOL_IP, SO_ORIGINAL_DST, destaddr, &socklen);
+  if (error) {
+    return errno;
+  }
+  return 0;
+}
+
+SOCKET createTcpListeningSocket(int port) {
+
+  SOCKET result;
+  result.error = NULL;
+
+  int s = socket(AF_INET, SOCK_STREAM , 0);
+  if(s == -1)
+  {
+    result.error = getLastErrorMessage();
+    return result;
+  }
+  result.socket = s;
+  struct sockaddr_in server;
+  server.sin_addr.s_addr = INADDR_ANY;
+  server.sin_family = AF_INET;
+  server.sin_port = htons(port);
+
+  if( bind(s, (struct sockaddr *)&server , sizeof(server)) < 0)
+  {
+    result.error = getLastErrorMessage();
+    return result;
+  }
+  listen(s, 5);
+
+  result.socket = s;
+  return result;
+}
+
+typedef struct {
+  int clientSocket;
+  struct sockaddr_in sockaddr;
+  int addrLen;
+  char* error;
+} CONN;
+
+CONN acceptTcpSocket(int s) {
+
+  CONN result;
+  result.error = NULL;
+  struct sockaddr_in client;
+  int c, clientSocket;
+
+  clientSocket = accept(s, (struct sockaddr *)&client, (socklen_t*)&c);
+
+  int err = getdestaddrIptables(clientSocket, &client);
+  if (err) {
+    puts("Get dest error!");
+    result.error = getLastErrorMessage();
+    close(clientSocket);
+    return result;
+  }
+
+  client.sin_port = ntohs(client.sin_port);
+  //client.sin_addr.s_addr = ntohl(client.sin_addr.s_addr);
+
+  result.clientSocket = clientSocket;
+  result.sockaddr = client;
+  result.addrLen = c;
   return result;
 
 }
@@ -95,12 +174,21 @@ void handlePacket(int s, void* packetData, int n) {
 /*
 int main(void) {
 
-  SOCKET s = createTcpSocket();
+  SOCKET s = createTcpListeningSocket(2222);
   if (s.error) {
     puts(s.error);
     return 1;
   }
-  subscribeToTcpPackets(s.socket, handlePacket);
+  CONN conn = acceptTcpSocket(s.socket);
+  if (conn.error) {
+    puts("Accept error");
+    puts(conn.error);
+    return 1;
+  }
+  puts("Everything is fine!");
+  struct sockaddr_in sin = conn.sockaddr;
+  printf("Packet from %s:%d\n", inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
+
   return 0;
 
 }
