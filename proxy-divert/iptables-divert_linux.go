@@ -6,10 +6,14 @@ import (
   "errors"
   "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/nettools"
   "os"
-  "os/signal"
   "syscall"
   "log"
   "fmt"
+  "net"
+  "github.com/google/gopacket/layers"
+  "github.com/coreos/go-iptables/iptables"
+  "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/at-fire"
+  "github.com/tebeka/atexit"
 )
 
 var errlog = log.New(
@@ -20,18 +24,21 @@ var errlog = log.New(
 
 var internalIP = "127.0.0.5"
 
-func getFireSignalsChannel() chan os.Signal {
+func sendViaSocket(packetData []byte, toIP net.IP, port int) error {
 
-  c := make(chan os.Signal, 1)
-  signal.Notify(c,
-    // https://www.gnu.org/software/libc/manual/html_node/Termination-Signals.html
-    syscall.SIGTERM, // "the normal way to politely ask a program to terminate"
-    syscall.SIGINT, // Ctrl+C
-    syscall.SIGQUIT, // Ctrl-\
-    syscall.SIGKILL, // "always fatal", "SIGKILL and SIGSTOP may not be caught by a program"
-    syscall.SIGHUP, // "terminal is disconnected"
-  )
-  return c
+  s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_RAW)
+  if err != nil {
+    return err
+  }
+  defer syscall.Close(s)
+
+  var arr [4]byte
+  copy(arr[:], toIP.To4()[:4])
+  addr := syscall.SockaddrInet4{
+    Addr: arr,
+    Port: port,
+  }
+  return syscall.Sendto(s, packetData, 0, &addr)
 
 }
 
@@ -41,7 +48,7 @@ func exit() {
 
 }
 
-var exitChan = getFireSignalsChannel()
+var exitChan = atFire.GetFireSignalsChannel()
 
 func toErr(msg *C.char) error {
   return errors.New(C.GoString(msg))
@@ -73,14 +80,14 @@ func write(s C.int, data []byte) (int, error) {
 }
 
 type realAddr struct {
-  ip string
-  port uint16
+  realIP string
+  realPort uint16
   clientSocket C.int
 }
 
 var PORT_TO_DST = make(map[uint16]realAddr)
 
-func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) /*(unsub func() error, injectPacket func([]byte) error)*/ (err error) {
+func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (unsub func() error, injectPacket func([]byte) error, err error) {
 
   result := C.createTcpRawSocket()
   if result.error != nil {
@@ -99,7 +106,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) /
         break
       }
 
-      _, ip, tcp, _, err := nettools.ParseTCPPacket(packetData)
+      _, ip, tcp, recompilePacket, err := nettools.ParseTCPPacket(packetData)
       if err != nil {
         // errlog.Println(err)
         continue
@@ -107,6 +114,17 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) /
       if ip.DstIP.String() != internalIP {
         continue
       }
+      rly, ok := PORT_TO_DST[uint16(tcp.DstPort)]
+      if !ok {
+        fmt.Printf("Port %d not in base\n", tcp.DstPort)
+        continue
+      }
+      if ip.DstIP.Equal(ip.SrcIP) {
+        ip.DstIP = net.ParseIP(rly.realIP)
+        tcp.DstPort = layers.TCPPort(rly.realPort)
+        recompilePacket()
+      }
+
       fmt.Printf("Internal: Packet from %s:%d to %s:%d\n", ip.SrcIP.String(), tcp.SrcPort, ip.DstIP.String(), tcp.DstPort)
       packetHandler(packetData)
 
@@ -125,6 +143,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) /
   go func(){
 
     defer C.close(iptSocket)
+    atexit.Register(func() { C.close(iptSocket) })
     for {
       /*
       typedef struct {
@@ -158,13 +177,13 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) /
         fmt.Printf("Accepted connection from %s:%d to %s:%d\n", originalIP, originalPort, realIP, realPort)
 
         PORT_TO_DST[originalPort] = realAddr{
-          ip: realIP,
-          port: realPort,
+          realIP: realIP,
+          realPort: realPort,
           clientSocket: clientSocket,
         }
 
         defer delete(PORT_TO_DST, originalPort)
-        result = C.createTcpConnectingSocket(C.CString(internalIP))
+        result = C.createTcpConnectingSocket(C.CString(internalIP), C.uint(originalPort))
         if result.error != nil {
           err = toErr(result.error)
           errlog.Println(err)
@@ -193,7 +212,87 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) /
 
   }()
 
-  return
+  injectPacket = func(packetData []byte) error {
+
+    _, ip, tcp, _, err := nettools.ParseTCPPacket(packetData)
+    if err != nil {
+      return err
+    }
+
+    rly, ok := PORT_TO_DST[uint16(tcp.DstPort)]
+    _ = rly
+    if !ok {
+      fmt.Printf("%s:%d not in ports\n", ip.DstIP.String(), tcp.DstPort)
+      os.Exit(1)
+    }
+
+    /*
+    if len(tcp.Payload) > 0 {
+      _, err = rly.clientSocket.Write(tcp.Payload)
+      if err != nil {
+        errlog.Println(err)
+      }
+    } else {
+      err = sendViaSocket(packetData, ip.DstIP, int(tcp.DstPort))
+      if err != nil {
+        errlog.Println(err)
+        return err
+      }
+    }
+    */
+
+    return nil
+
+  }
+
+  appendRule := func(table, chain string, args ...string) (func() error, error) {
+
+    ipt, err := iptables.New()
+    if err != nil {
+      return nil, err
+    }
+    err = ipt.AppendUnique(table, chain, args...)
+    if err != nil {
+      return nil, err
+    }
+    return func() error {
+
+      fmt.Println("Restoring Internet settings!")
+      return ipt.Delete(table, chain, args...)
+
+    }, nil
+
+  }
+
+  negs := []string{}
+  if len(exceptions) > 0 {
+    /*
+    ipsports, err := hostsToIPs(exceptions)
+    if err != nil {
+      return nil, nil, err
+    }
+    ip := ipsports[0].ips[0]
+    negs = []string{"!", "-d", ip}
+    fmt.Println("NEGS", negs)
+    */
+  }
+
+  args := []string{"-p", "tcp", "-m", "tcp", "-j", "REDIRECT", "--dport", "80", "--to-port", "2222"}
+  args = append(args, negs...)
+  unsub, err = appendRule("nat", "OUTPUT", args...)
+  if err != nil {
+    return nil, nil, err
+  }
+
+  fire := atFire.GetFireSignalsChannel()
+  go func(){
+    for _ = range fire {
+      unsub()
+      fmt.Println("Exiting after signal.")
+    }
+  }()
+
+  return unsub, injectPacket, nil
 
 }
 
@@ -203,10 +302,12 @@ func packetHandler(packetData []byte) {
 
 func main() {
 
-  err := SubscribeToPacketsExcept([]string{}, packetHandler)
+  unsub, _, err := SubscribeToPacketsExcept([]string{}, packetHandler)
+  defer unsub()
   if err != nil {
     panic(err)
   }
   <-exitChan
+  atexit.Exit(0)
 
 }

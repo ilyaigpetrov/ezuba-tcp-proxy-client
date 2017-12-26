@@ -46,7 +46,7 @@ static int getdestaddrIptables(int fd, struct sockaddr_in *destaddr)
   return 0;
 }
 
-SOCKET createTcpListeningSocket(unsigned long ip, int port) {
+SOCKET createTcpListeningSocket(unsigned long ip, unsigned int port) {
 
   SOCKET result;
   result.error = NULL;
@@ -75,7 +75,7 @@ SOCKET createTcpListeningSocket(unsigned long ip, int port) {
 
 }
 
-SOCKET createTcpConnectingSocket(char* ip) {
+SOCKET createTcpConnectingSocket(char* ip, unsigned int port) {
 
   SOCKET result;
   result.error = NULL;
@@ -91,7 +91,7 @@ SOCKET createTcpConnectingSocket(char* ip) {
   struct sockaddr_in server;
   server.sin_family = AF_INET;
   server.sin_addr.s_addr = inet_addr(ip);
-  server.sin_port = 0;
+  server.sin_port = htons(port);
 
   if( bind(s, (struct sockaddr *)&server , sizeof(server)) < 0)
   {

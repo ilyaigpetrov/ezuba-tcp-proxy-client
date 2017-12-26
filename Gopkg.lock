@@ -20,6 +20,12 @@
   version = "v1.1.14"
 
 [[projects]]
+  name = "github.com/tebeka/atexit"
+  packages = ["."]
+  revision = "246bd1df1758fe9df5a88fc3e0f6e77271e97e55"
+  version = "v0.1.0"
+
+[[projects]]
   branch = "master"
   name = "github.com/zdannar/flogger"
   packages = ["."]
@@ -40,6 +46,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "118dadaa587a1d94ddaf13f5b19b14f395e5cf50f00cf95e35ccbfe776f2534a"
+  inputs-digest = "569f3df5246ddd5e03d5fc2b0b8c6e61dc3330e934ebafbc0e7e743f0d0a2330"
   solver-name = "gps-cdcl"
   solver-version = 1
