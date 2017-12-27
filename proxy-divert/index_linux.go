@@ -12,6 +12,8 @@ import (
   //"errors"
   //"encoding/hex"
   //"time"
+  "strings"
+  "strconv"
 
   "github.com/google/gopacket"
   "github.com/google/gopacket/layers"
@@ -29,9 +31,10 @@ var outlog = log.New(os.Stdout,
     "INFO: ", 0)
 
 type realAddr struct {
-  ip string
-  port uint16
-  bootPort uint16
+  realIP string
+  realPort uint16
+  sourceIP string
+  sourcePort uint16
   connection *net.TCPConn
 }
 
@@ -103,9 +106,19 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
           errlog.Println(err)
           return
         }
+
+        parts := strings.Split(remoteStr, ":")
+        sourceIP := parts[0]
+        sourcePort, err := strconv.Atoi(parts[1])
+        if err != nil {
+          return
+        }
+
         SRC_TO_DST[remoteStr] = realAddr{
-          ip: ipv4,
-          port: port,
+          realIP: ipv4,
+          realPort: port,
+          sourceIP: sourceIP,
+          sourcePort: uint16(sourcePort),
           connection: connection,
         }
         PORT_TO_DST[freePort] = SRC_TO_DST[remoteStr]
@@ -205,8 +218,8 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
             continue
           }
 
-          rlyStr := rly.ip
-          rlyPort := rly.port
+          rlyStr := rly.realIP
+          rlyPort := rly.realPort
           rlyIP := net.ParseIP(rlyStr)
 
           if (ip.SrcIP.Equal(rlyIP)) {
@@ -248,27 +261,32 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
 
   injectPacket = func(packetData []byte) error {
 
-    _, ip, tcp, _, err := nettools.ParseTCPPacket(packetData)
+    _, ip, tcp, recompile, err := nettools.ParseTCPPacket(packetData)
     if err != nil {
       return err
     }
-
-    /*
-    header, err := ipv4.ParseHeader(packetData)
-    if err != nil {
-      errlog.Println(err)
-      return err
-    }
-    fmt.Printf("Inject (via socket): %s:%s to %s:%d\n", header.Src.String(), tcp.SrcPort, header.Dst.String(), tcp.DstPort)
-    */
-
-    //_, _, err = ipConn.WriteMsgIP(packetData, []byte{}, &net.IPAddr{IP: header.Dst})
 
     rly, ok := PORT_TO_DST[uint16(tcp.DstPort)]
     if !ok {
       fmt.Printf("%s:%d not in ports\n", ip.DstIP.String(), tcp.DstPort)
       os.Exit(1)
     }
+
+    ip.DstIP = net.ParseIP(rly.sourceIP)
+    tcp.DstPort = layers.TCPPort(rly.sourcePort)
+
+    ip.SrcIP = net.ParseIP("127.0.0.1")
+    tcp.SrcPort = layers.TCPPort(port)
+
+    packetData, err = recompile()
+    if err != nil {
+      errlog.Println(err)
+      return err
+    }
+
+    src := fmt.Sprintf("%s:%d", ip.SrcIP.String(), tcp.SrcPort)
+    dst := fmt.Sprintf("%s:%d", ip.DstIP.String(), tcp.DstPort)
+    fmt.Printf("INJECT: From %s to %s\n", src, dst)
 
     if len(tcp.Payload) > 0 {
       _, err = rly.connection.Write(tcp.Payload)
