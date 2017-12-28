@@ -10,3 +10,7 @@ Proxy server: https://github.com/ilyaigpetrov/ezuba-tcp-proxy-server
 3. `sudo ./ezuba-tcp-proxy-client ezuba_server_ip:port`
 
 [WinDivert]: https://reqrypt.org/windivert.html
+
+## Why The Name?
+
+Ezuba is abuze backwards.
