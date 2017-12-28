@@ -35,7 +35,7 @@ type realAddr struct {
   realPort uint16
   sourceIP string
   sourcePort uint16
-  connection *net.TCPConn
+  iptConnection *net.TCPConn
 }
 
 var SRC_TO_DST = make(map[string]realAddr)
@@ -71,29 +71,29 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
   }
   go func(){
 
-    // Handle incoming connections on listener
+    // Handle incoming iptConnections on listener
     for {
-      connection, err := listener.AcceptTCP()
-      if connection == nil || err != nil {
-        errlog.Println("Nil connection", err)
+      iptConnection, err := listener.AcceptTCP()
+      if iptConnection == nil || err != nil {
+        errlog.Println("Nil iptConnection", err)
         continue
       }
-      la := connection.LocalAddr()
+      la := iptConnection.LocalAddr()
       if (la == nil) {
-        connection.Close()
+        iptConnection.Close()
         errlog.Println("Connection lost (no local addr)!")
         continue
       }
-      remoteStr := connection.RemoteAddr().String()
+      remoteStr := iptConnection.RemoteAddr().String()
       fmt.Printf("Connection from %s to %s accepted\n", la.String(), remoteStr)
 
       go func(){
 
-        defer connection.Close()
-        ipv4, port, newConn, err := getOriginalDst(connection)
+        defer iptConnection.Close()
+        ipv4, port, newConn, err := getOriginalDst(iptConnection)
         // fmt.Println( la.String(), fmt.Sprintf("%s:%d", ipv4, port) )
 
-        connection = newConn
+        iptConnection = newConn
         if err != nil {
           errlog.Println(err)
           return
@@ -119,7 +119,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
           realPort: port,
           sourceIP: sourceIP,
           sourcePort: uint16(sourcePort),
-          connection: connection,
+          iptConnection: iptConnection,
         }
         PORT_TO_DST[freePort] = SRC_TO_DST[remoteStr]
         defer delete(SRC_TO_DST, remoteStr)
@@ -154,7 +154,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
           fmt.Println("NONBLOCK")
           conIn := make([]byte, 1000000) // about 1MB
           fmt.Println("READ FROM SYSTEM")
-          n, err := connection.Read(conIn)
+          n, err := iptConnection.Read(conIn)
           if err != nil {
             errlog.Println(err)
             return
@@ -289,7 +289,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
     fmt.Printf("INJECT: From %s to %s\n", src, dst)
 
     if len(tcp.Payload) > 0 {
-      _, err = rly.connection.Write(tcp.Payload)
+      _, err = rly.iptConnection.Write(tcp.Payload)
       if err != nil {
         errlog.Println(err)
       }
