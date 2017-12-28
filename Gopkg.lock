@@ -43,9 +43,15 @@
   packages = ["windows"]
   revision = "571f7bbbe08da2a8955aed9d4db316e78630e9a3"
 
+[[projects]]
+  name = "gopkg.in/oleiade/reflections.v1"
+  packages = ["."]
+  revision = "2b6ec3da648e3e834dc41bad8d9ed7f2dc6a9496"
+  version = "v1.0.0"
+
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "569f3df5246ddd5e03d5fc2b0b8c6e61dc3330e934ebafbc0e7e743f0d0a2330"
+  inputs-digest = "d6d33ce2e3581943ebd80de2dccd6d398430a54b16a11a3295c39ebd3ad6c839"
   solver-name = "gps-cdcl"
   solver-version = 1

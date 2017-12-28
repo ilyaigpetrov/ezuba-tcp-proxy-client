@@ -14,6 +14,8 @@ import (
   "github.com/coreos/go-iptables/iptables"
   "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/at-fire"
   "github.com/tebeka/atexit"
+  "strings"
+  "gopkg.in/oleiade/reflections.v1"
 )
 
 var errlog = log.New(
@@ -119,13 +121,25 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
         fmt.Printf("Port %d not in base\n", tcp.DstPort)
         continue
       }
+      fmt.Printf("Internal: Packet from %s:%d to %s:%d %d\n", ip.SrcIP.String(), tcp.SrcPort, ip.DstIP.String(), tcp.DstPort, tcp.Seq)
       if ip.DstIP.Equal(ip.SrcIP) {
         ip.DstIP = net.ParseIP(rly.realIP)
         tcp.DstPort = layers.TCPPort(rly.realPort)
         recompilePacket()
       }
 
-      fmt.Printf("Internal: Packet from %s:%d to %s:%d\n", ip.SrcIP.String(), tcp.SrcPort, ip.DstIP.String(), tcp.DstPort)
+      fmt.Printf("Internal: Packet from %s:%d to %s:%d %d", ip.SrcIP.String(), tcp.SrcPort, ip.DstIP.String(), tcp.DstPort, tcp.Seq)
+      flags := strings.Split("FIN SYN RST PSH ACK URG ECE CWR NS", " ")
+      for _, flag := range flags {
+        val, err := reflections.GetField(tcp, flag)
+        if err != nil {
+          errlog.Println(err, "AAAA!")
+        }
+        if val.(bool) {
+          fmt.Printf(" %s", flag)
+        }
+      }
+      fmt.Printf("\n")
       packetHandler(packetData)
 
     }
