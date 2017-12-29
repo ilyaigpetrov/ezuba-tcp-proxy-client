@@ -15,12 +15,12 @@ import (
   "strings"
   "strconv"
 
-  "github.com/google/gopacket"
   "github.com/google/gopacket/layers"
 
   "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/nettools"
   "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/at-fire"
-  "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/proxy-divert/vendor-local/freeport"
+
+  "gopkg.in/oleiade/reflections.v1"
 )
 
 var errlog = log.New(os.Stderr,
@@ -38,8 +38,8 @@ type realAddr struct {
   iptConnection *net.TCPConn
 }
 
-var SRC_TO_DST = make(map[string]realAddr)
 var PORT_TO_DST = make(map[uint16]realAddr)
+var PORT_TO_SYN = make(map[uint16][]byte)
 
 var noop = func() {}
 
@@ -65,7 +65,94 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
 
   internalIP := "127.0.0.5"
   port := 2222
-  listener, err := net.ListenTCP("tcp", &net.TCPAddr{ IP: net.IPv4(127,0,0,1), Port: port })
+
+  ipConn, err := net.ListenIP("ip:tcp", &net.IPAddr{IP: net.ParseIP(internalIP)})
+  if err != nil {
+    fmt.Println("Try running under root rights.")
+    errlog.Fatal(err)
+  }
+
+  log.Println("Listening!")
+  maxIPPacketSize := math.MaxUint16
+
+  go func(){
+    for {
+      ipBuf := make([]byte, maxIPPacketSize)
+      oob := make([]byte, maxIPPacketSize)
+      n, _, _, _, err := ipConn.ReadMsgIP(ipBuf, oob)
+      if err != nil {
+        errlog.Println(err)
+      }
+      packetData := ipBuf[:n]
+
+      _, ip, tcp, recompile, err := nettools.ParseTCPPacket(packetData)
+      if err != nil {
+        errlog.Println(err)
+        continue
+      }
+
+      dst := ip.DstIP.String()
+      src := ip.SrcIP.String()
+
+      if dst != internalIP {
+        fmt.Printf("%s not internal %s\n", dst, internalIP)
+        continue
+      }
+
+      fmt.Printf("Internal: Packet from %s:%d to %s:%d %d", ip.SrcIP.String(), tcp.SrcPort, ip.DstIP.String(), tcp.DstPort, tcp.Seq)
+      flags := strings.Split("FIN SYN RST PSH ACK URG ECE CWR NS", " ")
+      for _, flag := range flags {
+        val, err := reflections.GetField(tcp, flag)
+        if err != nil {
+          errlog.Println(err, "REFLECT ERROR!")
+        }
+        if val.(bool) {
+          fmt.Printf(" %s", flag)
+        }
+      }
+      fmt.Printf("\n")
+
+      rly, ok := PORT_TO_DST[uint16(tcp.DstPort)]
+      if !ok {
+        fmt.Println("NOT ACCEPTED YET")
+        if tcp.SYN {
+          PORT_TO_SYN[uint16(tcp.DstPort)] = packetData
+        } else {
+          fmt.Printf("%s:%d not in ports\n", dst, tcp.DstPort)
+          //os.Exit(1)
+        }
+        continue
+      }
+
+      rlyStr := rly.realIP
+      rlyPort := rly.realPort
+      rlyIP := net.ParseIP(rlyStr)
+
+      if (ip.SrcIP.Equal(rlyIP)) {
+        // It's reply from target, inbound packet
+        // Already injected.
+        continue
+      } else {
+        ip.DstIP = rlyIP
+        tcp.DstPort = layers.TCPPort(rlyPort)
+      }
+
+      src = fmt.Sprintf("%s:%d", ip.SrcIP.String(), tcp.SrcPort)
+      dst = fmt.Sprintf("%s:%d", ip.DstIP.String(), tcp.DstPort)
+      fmt.Printf("From %s to %s\n", src, dst)
+
+      modPacket, err := recompile()
+      if err != nil {
+        errlog.Println(err)
+        continue
+      }
+
+      packetHandler(modPacket)
+
+    }
+  }()
+
+  listener, err := net.ListenTCP("tcp", &net.TCPAddr{ IP: net.ParseIP(internalIP), Port: port })
   if err != nil {
     errlog.Fatal(err)
   }
@@ -98,14 +185,6 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
           errlog.Println(err)
           return
         }
-        defer newConn.Close()
-
-        freePortInt, err := freeport.GetFreePort(internalIP)
-        freePort := uint16(freePortInt)
-        if err != nil {
-          errlog.Println(err)
-          return
-        }
 
         parts := strings.Split(remoteStr, ":")
         sourceIP := parts[0]
@@ -114,149 +193,17 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
           return
         }
 
-        SRC_TO_DST[remoteStr] = realAddr{
+        PORT_TO_DST[uint16(sourcePort)] = realAddr{
           realIP: ipv4,
           realPort: port,
           sourceIP: sourceIP,
           sourcePort: uint16(sourcePort),
           iptConnection: iptConnection,
         }
-        PORT_TO_DST[freePort] = SRC_TO_DST[remoteStr]
-        defer delete(SRC_TO_DST, remoteStr)
-        defer delete(PORT_TO_DST, freePort)
-
-
-        s, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM , 0)
-        if err != nil {
-          errlog.Println(err)
-          return
-        }
-        defer syscall.Close(s)
-
-        var iip [4]byte
-        copy(iip[:], net.ParseIP(internalIP).To4()[:4])
-        addr := syscall.SockaddrInet4{
-          Port: freePortInt,
-          Addr: iip,
-        }
-        err = syscall.Bind(s, &addr)
-        if err != nil {
-          errlog.Println(err)
-          return
-        }
-        err = syscall.Connect(s, &addr)
-        if err != nil {
-          errlog.Println(err)
-          return
-        }
-
-        for {
-          fmt.Println("NONBLOCK")
-          conIn := make([]byte, 1000000) // about 1MB
-          fmt.Println("READ FROM SYSTEM")
-          n, err := iptConnection.Read(conIn)
-          if err != nil {
-            errlog.Println(err)
-            return
-          }
-          fmt.Println("WRITE TO SOCKET")
-          _, err = syscall.Write(s, conIn[:n])
-          if err != nil {
-            errlog.Println(err)
-            return
-          }
-        }
 
       }()
     }
 
-  }()
-
-  ipConn, err := net.ListenIP("ip:tcp", &net.IPAddr{IP: net.ParseIP(internalIP)})
-  if err != nil {
-    fmt.Println("Try running under root rights.")
-    errlog.Fatal(err)
-  }
-
-  log.Println("Listening!")
-  maxIPPacketSize := math.MaxUint16
-
-  go func(){
-    for {
-      ipBuf := make([]byte, maxIPPacketSize)
-      oob := make([]byte, maxIPPacketSize)
-      n, _, _, _, err := ipConn.ReadMsgIP(ipBuf, oob)
-      if err != nil {
-        errlog.Println(err)
-      }
-      packetData := ipBuf[:n]
-
-      var dst string
-      var src string
-      // Decode a packet
-      packet := gopacket.NewPacket(packetData, layers.LayerTypeIPv4, gopacket.Default)
-      // Get the TCP layer from this packet
-      if ipLayer := packet.Layer(layers.LayerTypeIPv4); ipLayer != nil {
-        ip, _ := ipLayer.(*layers.IPv4)
-        dst = ip.DstIP.String()
-        src = ip.SrcIP.String()
-
-        if dst != internalIP {
-          fmt.Printf("%s not internal %s\n", dst, internalIP)
-          continue
-        }
-
-        if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
-          tcp, _ := tcpLayer.(*layers.TCP)
-
-          fmt.Printf("Internal packet from %s:%d to %s:%d\n", ip.SrcIP.String(), tcp.SrcPort, ip.DstIP.String(), tcp.DstPort)
-
-          rly, ok := PORT_TO_DST[uint16(tcp.DstPort)]
-          if !ok {
-            fmt.Printf("%s:%d not in ports\n", dst, tcp.DstPort)
-            os.Exit(1)
-            continue
-          }
-
-          rlyStr := rly.realIP
-          rlyPort := rly.realPort
-          rlyIP := net.ParseIP(rlyStr)
-
-          if (ip.SrcIP.Equal(rlyIP)) {
-            // It's reply from target, inbound packet
-            // Already injected.
-            continue
-          } else {
-            ip.DstIP = rlyIP
-            tcp.DstPort = layers.TCPPort(rlyPort)
-          }
-
-
-          src = fmt.Sprintf("%s:%d", ip.SrcIP.String(), tcp.SrcPort)
-          dst = fmt.Sprintf("%s:%d", ip.DstIP.String(), tcp.DstPort)
-          fmt.Printf("From %s to %s\n", src, dst)
-
-          options := gopacket.SerializeOptions{
-            ComputeChecksums: true,
-            FixLengths: true,
-          }
-          newBuffer := gopacket.NewSerializeBuffer()
-          tcp.SetNetworkLayerForChecksum(ip)
-          err := gopacket.SerializePacket(newBuffer, options, packet)
-          if err != nil {
-            errlog.Println(err)
-            continue
-          }
-
-          outgoingPacket := newBuffer.Bytes()
-          _ = outgoingPacket
-          packetHandler(outgoingPacket)
-
-        }
-
-      }
-
-    }
   }()
 
   injectPacket = func(packetData []byte) error {
@@ -335,7 +282,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
     fmt.Println("NEGS", negs)
   }
 
-  args := []string{"-p", "tcp", "-m", "tcp", "-j", "REDIRECT", "--dport", "80", "--to-port", "2222"}
+  args := []string{"-p", "tcp", "-m", "tcp", "-j", "DNAT", "--dport", "80", "--to-destination", "127.0.0.5:2222"}
   args = append(args, negs...)
   unsub, err = appendRule("nat", "OUTPUT", args...)
   if err != nil {
