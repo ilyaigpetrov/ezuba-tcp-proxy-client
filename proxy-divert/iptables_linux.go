@@ -66,6 +66,98 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
   internalIP := "127.0.0.5"
   port := 2222
 
+  var processPacket func([]byte)
+
+  sendSynPacketFor := func(srcPort uint16) {
+
+    synPacket, ok := PORT_TO_SYN[srcPort]
+    if ok {
+      delete(PORT_TO_SYN, srcPort)
+      fmt.Println("Processing SYN")
+      processPacket(synPacket)
+    } else {
+      fmt.Printf("Port SYN is empty for %d\n", srcPort)
+    }
+
+  }
+
+  processPacket = func(packetData []byte) {
+
+    _, ip, tcp, recompile, err := nettools.ParseTCPPacket(packetData)
+    if err != nil {
+      errlog.Println(err)
+      return
+    }
+
+    dst := ip.DstIP.String()
+    src := ip.SrcIP.String()
+
+    if dst != internalIP {
+      fmt.Printf("%s not internal %s\n", dst, internalIP)
+      return
+    }
+
+    fmt.Printf("Internal: Packet from %s:%d to %s:%d %d", ip.SrcIP.String(), tcp.SrcPort, ip.DstIP.String(), tcp.DstPort, tcp.Seq)
+    flags := strings.Split("FIN SYN RST PSH ACK URG ECE CWR NS", " ")
+    for _, flag := range flags {
+      val, err := reflections.GetField(tcp, flag)
+      if err != nil {
+        errlog.Println(err, "REFLECT ERROR!")
+      }
+      if val.(bool) {
+        fmt.Printf(" %s", flag)
+      }
+    }
+    fmt.Printf("\n")
+
+    if tcp.ACK || tcp.PSH {
+      return
+    }
+
+    srcPort := uint16(tcp.SrcPort)
+
+    fmt.Printf("Checking port %d\n", srcPort)
+    rly, ok := PORT_TO_DST[srcPort]
+    if !ok {
+      fmt.Println("NOT ACCEPTED YET")
+      if tcp.SYN {
+        PORT_TO_SYN[srcPort] = packetData
+      } else {
+        fmt.Printf("%s:%d not in ports\n", dst, tcp.DstPort)
+        //os.Exit(1)
+      }
+      return
+    }
+
+    sendSynPacketFor(srcPort)
+
+    rlyStr := rly.realIP
+    rlyPort := rly.realPort
+    rlyIP := net.ParseIP(rlyStr)
+
+    if (ip.SrcIP.Equal(rlyIP)) {
+      // It's reply from target, inbound packet
+      // Already injected.
+      return
+    } else {
+      ip.DstIP = rlyIP
+      tcp.DstPort = layers.TCPPort(rlyPort)
+    }
+
+    src = fmt.Sprintf("%s:%d", ip.SrcIP.String(), tcp.SrcPort)
+    dst = fmt.Sprintf("%s:%d", ip.DstIP.String(), tcp.DstPort)
+    fmt.Printf("From %s to %s\n", src, dst)
+
+    modPacket, err := recompile()
+    if err != nil {
+      errlog.Println(err)
+      return
+    }
+
+    packetHandler(modPacket)
+
+  }
+
   ipConn, err := net.ListenIP("ip:tcp", &net.IPAddr{IP: net.ParseIP(internalIP)})
   if err != nil {
     fmt.Println("Try running under root rights.")
@@ -85,69 +177,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
       }
       packetData := ipBuf[:n]
 
-      _, ip, tcp, recompile, err := nettools.ParseTCPPacket(packetData)
-      if err != nil {
-        errlog.Println(err)
-        continue
-      }
-
-      dst := ip.DstIP.String()
-      src := ip.SrcIP.String()
-
-      if dst != internalIP {
-        fmt.Printf("%s not internal %s\n", dst, internalIP)
-        continue
-      }
-
-      fmt.Printf("Internal: Packet from %s:%d to %s:%d %d", ip.SrcIP.String(), tcp.SrcPort, ip.DstIP.String(), tcp.DstPort, tcp.Seq)
-      flags := strings.Split("FIN SYN RST PSH ACK URG ECE CWR NS", " ")
-      for _, flag := range flags {
-        val, err := reflections.GetField(tcp, flag)
-        if err != nil {
-          errlog.Println(err, "REFLECT ERROR!")
-        }
-        if val.(bool) {
-          fmt.Printf(" %s", flag)
-        }
-      }
-      fmt.Printf("\n")
-
-      rly, ok := PORT_TO_DST[uint16(tcp.DstPort)]
-      if !ok {
-        fmt.Println("NOT ACCEPTED YET")
-        if tcp.SYN {
-          PORT_TO_SYN[uint16(tcp.DstPort)] = packetData
-        } else {
-          fmt.Printf("%s:%d not in ports\n", dst, tcp.DstPort)
-          //os.Exit(1)
-        }
-        continue
-      }
-
-      rlyStr := rly.realIP
-      rlyPort := rly.realPort
-      rlyIP := net.ParseIP(rlyStr)
-
-      if (ip.SrcIP.Equal(rlyIP)) {
-        // It's reply from target, inbound packet
-        // Already injected.
-        continue
-      } else {
-        ip.DstIP = rlyIP
-        tcp.DstPort = layers.TCPPort(rlyPort)
-      }
-
-      src = fmt.Sprintf("%s:%d", ip.SrcIP.String(), tcp.SrcPort)
-      dst = fmt.Sprintf("%s:%d", ip.DstIP.String(), tcp.DstPort)
-      fmt.Printf("From %s to %s\n", src, dst)
-
-      modPacket, err := recompile()
-      if err != nil {
-        errlog.Println(err)
-        continue
-      }
-
-      packetHandler(modPacket)
+      processPacket(packetData)
 
     }
   }()
@@ -193,13 +223,17 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
           return
         }
 
+        srcPort := uint16(sourcePort)
+
         PORT_TO_DST[uint16(sourcePort)] = realAddr{
           realIP: ipv4,
           realPort: port,
           sourceIP: sourceIP,
-          sourcePort: uint16(sourcePort),
+          sourcePort: srcPort,
           iptConnection: iptConnection,
         }
+        fmt.Printf("Added source port %d\n", uint16(sourcePort))
+        sendSynPacketFor(srcPort)
 
       }()
     }
