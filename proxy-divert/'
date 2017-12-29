@@ -51,8 +51,8 @@ SOCKET createTcpListeningSocket(unsigned long ip, unsigned int port) {
   SOCKET result;
   result.error = NULL;
 
-  int s = socket(AF_INET, SOCK_STREAM , 0);
-  //int s = socket (PF_INET, SOCK_RAW, IPPROTO_TCP);
+  //int s = socket(AF_INET, SOCK_STREAM , 0);
+  int s = socket (PF_INET, SOCK_RAW, IPPROTO_TCP);
   if(s == -1)
   {
     result.error = getLastErrorMessage();
@@ -217,7 +217,6 @@ struct sockaddr_in getPeerName(int s) {
     perror("Failed to get peer name");
   }
   struct sockaddr_in sin = *((struct sockaddr_in*)&sad);
-  sin.sin_port = ntohs(sin.sin_port);
   errno = 0;
   return sin;
 
@@ -225,14 +224,13 @@ struct sockaddr_in getPeerName(int s) {
 
 struct sockaddr_in getSockName(int s) {
 
-  struct sockaddr_in sin;
+  struct sockaddr sad;
   socklen_t c;
-  int err = getsockname(s, (struct sockaddr*)&sin, &c);
+  int err = getsockname(s, &sad, &c);
   if (err) {
-    perror("Failed to get sock name");
+    perror("Failed to get peer name");
   }
-  //struct sockaddr_in sin = *((struct sockaddr_in*)&sad);
-  sin.sin_port = ntohs(sin.sin_port);
+  struct sockaddr_in sin = *((struct sockaddr_in*)&sad);
   errno = 0;
   return sin;
 

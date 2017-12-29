@@ -146,7 +146,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
 
   }()
 
-  result = C.createTcpListeningSocket(C.INADDR_ANY, 2222);
+  result = C.createTcpListeningSocket(C.inet_aton(C.CString("127.0.0.1")), 2222);
   if result.error != nil {
     err = toErr(result.error)
     errlog.Println(err)
@@ -173,9 +173,20 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
         continue
       }
 
-      sin := conn.sockaddr;
-      originalIP := C.GoString(C.inet_ntoa(sin.sin_addr))
-      originalPort := uint16(sin.sin_port)
+      //sin := conn.sockaddr;
+      sin := C.getSockName(conn.clientSocket)
+      sourceIP := C.GoString(C.inet_ntoa(sin.sin_addr))
+      sourcePort := uint16(sin.sin_port)
+      fmt.Printf("SOURCE: %s:%d\n", sourceIP, sourcePort)
+
+
+      sin2 := C.getPeerName(conn.clientSocket)
+      remoteIP := C.GoString(C.inet_ntoa(sin2.sin_addr))
+      remotePort := uint16(sin2.sin_port)
+      fmt.Printf("REMOTE: %s:%d\n", remoteIP, remotePort)
+      //TODO:
+      return
+      continue
       clientSocket := conn.clientSocket
       go func(){
 
@@ -188,16 +199,16 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
         }
         realIP := C.GoString(C.inet_ntoa(sin.sin_addr))
         realPort := uint16(sin.sin_port)
-        fmt.Printf("Accepted connection from %s:%d to %s:%d\n", originalIP, originalPort, realIP, realPort)
+        fmt.Printf("Accepted connection from %s:%d to %s:%d\n", sourceIP, sourcePort, realIP, realPort)
 
-        PORT_TO_DST[originalPort] = realAddr{
+        PORT_TO_DST[sourcePort] = realAddr{
           realIP: realIP,
           realPort: realPort,
           clientSocket: clientSocket,
         }
 
-        defer delete(PORT_TO_DST, originalPort)
-        result = C.createTcpConnectingSocket(C.CString(internalIP), C.uint(originalPort))
+        defer delete(PORT_TO_DST, sourcePort)
+        result = C.createTcpConnectingSocket(C.CString(internalIP), C.uint(sourcePort))
         if result.error != nil {
           err = toErr(result.error)
           errlog.Println(err)
