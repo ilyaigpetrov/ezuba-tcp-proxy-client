@@ -41,6 +41,15 @@ type realAddr struct {
 var PORT_TO_DST = make(map[uint16]realAddr)
 var PORT_TO_SYN = make(map[uint16][]byte)
 
+func closeConnection(srcPort uint16) {
+
+  rly := PORT_TO_DST[srcPort]
+  rly.iptConnection.Close()
+  delete(PORT_TO_DST, srcPort)
+  delete(PORT_TO_SYN, srcPort)
+
+}
+
 var noop = func() {}
 
 func sendViaSocket(packetData []byte, toIP net.IP, port int) error {
@@ -242,7 +251,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
 
   injectPacket = func(packetData []byte) error {
 
-    _, ip, tcp, recompile, err := nettools.ParseTCPPacket(packetData)
+    _, ip, tcp, _, err := nettools.ParseTCPPacket(packetData)
     if err != nil {
       return err
     }
@@ -253,6 +262,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
       os.Exit(1)
     }
 
+    /*
     ip.DstIP = net.ParseIP(rly.sourceIP)
     tcp.DstPort = layers.TCPPort(rly.sourcePort)
 
@@ -268,18 +278,17 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
     src := fmt.Sprintf("%s:%d", ip.SrcIP.String(), tcp.SrcPort)
     dst := fmt.Sprintf("%s:%d", ip.DstIP.String(), tcp.DstPort)
     fmt.Printf("INJECT: From %s to %s\n", src, dst)
+    */
 
     if len(tcp.Payload) > 0 {
       _, err = rly.iptConnection.Write(tcp.Payload)
       if err != nil {
         errlog.Println(err)
       }
-    } else {
-      err = sendViaSocket(packetData, ip.DstIP, int(tcp.DstPort))
-      if err != nil {
-        errlog.Println(err)
-        return err
-      }
+    }
+
+    if tcp.FIN || tcp.RST {
+      closeConnection(uint16(tcp.SrcPort))
     }
 
     return nil
