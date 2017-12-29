@@ -12,7 +12,7 @@ import (
   "runtime"
   "os"
   "io"
-  "encoding/hex"
+  //"encoding/hex"
   "net"
 
   "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/nettools"
@@ -60,7 +60,6 @@ func keepHandlingReply() {
       }
       xor42(tmp[:n])
       buf = append(buf, tmp[:n]...)
-      fmt.Println("RECEIVED:", hex.EncodeToString(buf))
 
       header, err := ipv4.ParseHeader(buf)
       if err != nil {
@@ -78,19 +77,16 @@ func keepHandlingReply() {
       packetData := buf[0:header.TotalLen]
       fmt.Println("Injecting packet...")
 
-
-      fmt.Println(hex.EncodeToString(packetData))
-
-      packet, ip, tcp, _, err := nettools.ParseTCPPacket(packetData)
+      packet, _, _, _, err := nettools.ParseTCPPacket(packetData)
       if err != nil {
         panic(err)
       }
-      fmt.Printf("Receiving from %s:%d to %s:%d\n", ip.SrcIP.String(), tcp.SrcPort, ip.DstIP.String(), tcp.DstPort)
 
-      fmt.Println(hex.Dump(packetData))
+      fmt.Println("RECEIVE:")
+      nettools.PrintPacket(packet)
 
       injectPacket(packetData)
-      pcapWriter.WritePacket(packet.Metadata().CaptureInfo, packet.Data())
+      //pcapWriter.WritePacket(packet.Metadata().CaptureInfo, packet.Data())
 
       buf = buf[header.TotalLen:]
     }
@@ -143,13 +139,14 @@ func packetHandler(packetData []byte) {
     return
   }
 
-  packet, ip, tcp, _, err := nettools.ParseTCPPacket(packetData)
+  packet, _, _, _, err := nettools.ParseTCPPacket(packetData)
   if err != nil {
     errlog.Println(err)
     return
   }
-  fmt.Printf("Sending from %s:%d to %s:%d\n", ip.SrcIP, tcp.SrcPort, ip.DstIP, tcp.DstPort)
-  pcapWriter.WritePacket(packet.Metadata().CaptureInfo, packet.Data())
+  fmt.Println("SENDING:")
+  nettools.PrintPacket(packet)
+  //pcapWriter.WritePacket(packet.Metadata().CaptureInfo, packet.Data())
 
   _, err = io.Copy(remote, bytes.NewReader(packetData))
   if err != nil {
