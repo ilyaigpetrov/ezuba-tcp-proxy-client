@@ -98,6 +98,25 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
     }
   }()
 
+
+  handle2, err := windivert.Open("inbound && tcp.Rst", windivert.LayerNetwork, -2, 0)
+  if err != nil {
+    return nil, nil, err
+  }
+  packetBuffer2 := make([]byte, maxPacketSize)
+  go func() {
+    for {
+      _, _, err := handle.Recv(packetBuffer2)
+      if err != nil {
+        fmt.Println(err)
+        continue
+      }
+      //packetData := packetBuffer[:n]
+      //packetHandler(packetData)
+
+    }
+  }()
+
   if theInterface == nil {
     rif := nettest.RoutedInterface("ip", net.FlagUp)
     if rif == nil {
@@ -114,7 +133,9 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
 
   return func() error {
 
-    return handle.Close()
+    err := handle.Close()
+    handle2.Close()
+    return err
 
   },
   func(packetData []byte) error {
