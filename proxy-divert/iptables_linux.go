@@ -43,7 +43,9 @@ var PORT_TO_QUEUE = make(map[uint16][][]byte)
 func closeConnection(srcPort uint16) {
 
   rly := PORT_TO_DST[srcPort]
-  rly.iptConnection.Close()
+  if rly.iptConnection != nil {
+    rly.iptConnection.Close()
+  }
   delete(PORT_TO_DST, srcPort)
   delete(PORT_TO_QUEUE, srcPort)
 
