@@ -15,9 +15,15 @@
 
 [[projects]]
   name = "github.com/google/gopacket"
-  packages = [".","layers","pcapgo"]
+  packages = [".","layers"]
   revision = "11c65f1ca9081dfea43b4f9643f5c155583b73ba"
   version = "v1.1.14"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/ilyaigpetrov/parse-tcp-go"
+  packages = ["."]
+  revision = "b3ec8b29dc0bebb32cda43d900c5523bd47a4e64"
 
 [[projects]]
   branch = "master"
@@ -29,13 +35,13 @@
   branch = "master"
   name = "golang.org/x/net"
   packages = ["bpf","internal/iana","internal/socket","ipv4"]
-  revision = "d866cfc389cec985d6fda2859936a575a55a3ab6"
+  revision = "434ec0c7fe3742c984919a691b2018a6e9694425"
 
 [[projects]]
   branch = "master"
   name = "golang.org/x/sys"
   packages = ["windows"]
-  revision = "571f7bbbe08da2a8955aed9d4db316e78630e9a3"
+  revision = "d38bf781f16e180a1b2ad82697d2f81d7b7ecfac"
 
 [[projects]]
   name = "gopkg.in/oleiade/reflections.v1"
@@ -46,6 +52,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "e0db67e927044690ab43d8fc32b168a94b008226ccdb880c8a50e8ed7be8c235"
+  inputs-digest = "677e4bedb5211af54f9ba6036f0020a59c3629579420b46d51f198bff19d3981"
   solver-name = "gps-cdcl"
   solver-version = 1

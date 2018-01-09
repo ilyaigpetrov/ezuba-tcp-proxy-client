@@ -15,11 +15,8 @@ import (
   "encoding/hex"
   "net"
 
-  "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/nettools"
+  "github.com/ilyaigpetrov/parse-tcp-go"
   "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/at-fire"
-
-  "github.com/google/gopacket/pcapgo"
-  "github.com/google/gopacket/layers"
 )
 
 var errlog = log.New(os.Stderr,
@@ -37,7 +34,7 @@ func xor42(data []byte) []byte {
   return data
 }
 
-var remote net.Conn
+var serverConnection net.Conn
 var isDisconnected = make(chan struct{})
 var isConnected = make(chan struct{}, 1)
 
@@ -49,7 +46,7 @@ func keepHandlingReply() {
     buf := make([]byte, 0, 65535) // big buffer
     tmp := make([]byte, 4096)     // using small tmp buffer for demonstrating
     for {
-      n, err := remote.Read(tmp)
+      n, err := serverConnection.Read(tmp)
       if err != nil {
         if err != io.EOF {
           fmt.Println("read error:", err)
@@ -58,10 +55,10 @@ func keepHandlingReply() {
         }
         break
       }
-      xor42(tmp[:n])
+      //xor42(tmp[:n])
       buf = append(buf, tmp[:n]...)
-      fmt.Println("RECEIVED:", hex.EncodeToString(buf))
 
+      fmt.Println("BUFFER:", hex.Dump(buf))
       header, err := ipv4.ParseHeader(buf)
       if err != nil {
         fmt.Println("Couldn't parse packet, dropping connnection.")
@@ -73,24 +70,19 @@ func keepHandlingReply() {
       }
       if (header.TotalLen > len(buf)) {
         fmt.Printf("Reading more up to %d\n", header.TotalLen)
+        fmt.Println("CURRENT:", hex.Dump(buf))
         continue
       }
       packetData := buf[0:header.TotalLen]
-      fmt.Println("Injecting packet...")
+      fmt.Println("INJECTING")
 
-
-      fmt.Println(hex.EncodeToString(packetData))
-
-      packet, ip, tcp, _, err := nettools.ParseTCPPacket(packetData)
+      packet, err := parseTCP.ParseTCPPacket(packetData)
       if err != nil {
         panic(err)
       }
-      fmt.Printf("Receiving from %s:%d to %s:%d\n", ip.SrcIP.String(), tcp.SrcPort, ip.DstIP.String(), tcp.DstPort)
-
-      fmt.Println(hex.Dump(packetData))
+      packet.Print()
 
       injectPacket(packetData)
-      pcapWriter.WritePacket(packet.Metadata().CaptureInfo, packet.Data())
 
       buf = buf[header.TotalLen:]
     }
@@ -102,12 +94,12 @@ func connectTo(serverPoint string) (ifConnected bool) {
 
   fmt.Printf("Dialing %s\n...", serverPoint)
   var err error
-  if remote != nil {
-    remote.Close()
-    remote = nil
+  if serverConnection != nil {
+    serverConnection.Close()
+    serverConnection = nil
   }
   fmt.Println("REMOTE REDEFINED")
-  remote, err = net.Dial("tcp", serverPoint)
+  serverConnection, err = net.Dial("tcp", serverPoint)
   if err != nil {
     fmt.Println("Can't connect to the server!")
     return false
@@ -139,19 +131,19 @@ func keepConnectedTo(serverPoint string) {
 }
 
 func packetHandler(packetData []byte) {
-  if remote == nil {
+  if serverConnection == nil {
     return
   }
 
-  packet, ip, tcp, _, err := nettools.ParseTCPPacket(packetData)
+  packet, err := parseTCP.ParseTCPPacket(packetData)
   if err != nil {
     errlog.Println(err)
     return
   }
-  fmt.Printf("Sending from %s:%d to %s:%d\n", ip.SrcIP, tcp.SrcPort, ip.DstIP, tcp.DstPort)
-  pcapWriter.WritePacket(packet.Metadata().CaptureInfo, packet.Data())
+  fmt.Printf("SENDING:")
+  packet.Print()
 
-  _, err = io.Copy(remote, bytes.NewReader(packetData))
+  _, err = io.Copy(serverConnection, bytes.NewReader(packetData))
   if err != nil {
     errlog.Println(err)
     isDisconnected <- struct{}{}
@@ -159,7 +151,6 @@ func packetHandler(packetData []byte) {
 
 }
 
-var pcapWriter *pcapgo.Writer
 
 func main() {
 
@@ -173,13 +164,6 @@ func main() {
     fmt.Printf("Usage: %s proxy_address:port\n", filepath.Base(os.Args[0]))
     os.Exit(1)
   }
-
-
-  snapshotLen := uint32(65535)
-  f, _ := os.Create("test.pcap")
-  pcapWriter := pcapgo.NewWriter(f)
-  pcapWriter.WriteFileHeader(snapshotLen, layers.LinkTypeIPv4)
-  defer f.Close()
 
   serverAddr := os.Args[1]
 
