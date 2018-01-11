@@ -5,14 +5,13 @@ import (
   "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/proxy-divert"
   "golang.org/x/net/ipv4"
   "path/filepath"
-  "fmt"
   "log"
   "time"
   "bytes"
   "runtime"
   "os"
   "io"
-  "encoding/hex"
+  //"encoding/hex"
   "net"
 
   "github.com/ilyaigpetrov/parse-tcp-go"
@@ -23,9 +22,8 @@ var errlog = log.New(os.Stderr,
     "ERROR: ",
     log.Lshortfile)
 
-var Info = log.New(os.Stdout,
-    "INFO: ",
-    log.Ldate|log.Ltime|log.Lshortfile)
+var infolog = log.New(os.Stdout,
+    "", log.Lshortfile)
 
 func xor42(data []byte) []byte {
   for i, b := range data {
@@ -42,6 +40,7 @@ var injectPacket func([]byte) error
 
 func keepHandlingReply() {
 
+  defer serverConnection.Close()
   for {
     buf := make([]byte, 0, 65535) // big buffer
     tmp := make([]byte, 4096)     // using small tmp buffer for demonstrating
@@ -49,38 +48,38 @@ func keepHandlingReply() {
       n, err := serverConnection.Read(tmp)
       if err != nil {
         if err != io.EOF {
-          fmt.Println("read error:", err)
+          infolog.Println("read error:", err)
           isDisconnected <- struct{}{}
           <-isConnected
         }
-        break
+        infolog.Println("EOF")
+        return
       }
       //xor42(tmp[:n])
       buf = append(buf, tmp[:n]...)
 
-      fmt.Println("BUFFER:", hex.Dump(buf))
       header, err := ipv4.ParseHeader(buf)
       if err != nil {
-        fmt.Println("Couldn't parse packet, dropping connnection.")
-        break
+        infolog.Println("Couldn't parse packet, dropping connnection.")
+        return
       }
       if header.TotalLen == 0 && len(buf) > 0 {
-        fmt.Println("Buffer is not parserable!")
+        infolog.Println("Buffer is not parserable!")
         os.Exit(1)
       }
       if (header.TotalLen > len(buf)) {
-        fmt.Printf("Reading more up to %d\n", header.TotalLen)
-        fmt.Println("CURRENT:", hex.Dump(buf))
+        infolog.Printf("Reading more up to %d\n", header.TotalLen)
+        //infolog.Println("CURRENT:", hex.Dump(buf))
         continue
       }
       packetData := buf[0:header.TotalLen]
-      fmt.Println("INJECTING")
+      infolog.Println("INJECTING")
 
       packet, err := parseTCP.ParseTCPPacket(packetData)
       if err != nil {
         panic(err)
       }
-      packet.Print()
+      packet.Print(100)
 
       injectPacket(packetData)
 
@@ -92,19 +91,19 @@ func keepHandlingReply() {
 
 func connectTo(serverPoint string) (ifConnected bool) {
 
-  fmt.Printf("Dialing %s\n...", serverPoint)
+  infolog.Printf("Dialing %s\n...", serverPoint)
   var err error
   if serverConnection != nil {
     serverConnection.Close()
-    serverConnection = nil
+    // serverConnection = nil
   }
-  fmt.Println("REMOTE REDEFINED")
+  infolog.Println("REMOTE REDEFINED")
   serverConnection, err = net.Dial("tcp", serverPoint)
   if err != nil {
-    fmt.Println("Can't connect to the server!")
+    infolog.Println("Can't connect to the server!")
     return false
   }
-  fmt.Println("Connected!")
+  infolog.Println("Connected!")
   isConnected <- struct{}{}
   return true
 
@@ -123,7 +122,7 @@ func keepConnectedTo(serverPoint string) {
       if ok {
         break
       }
-      fmt.Println("Reconnect in 5 seconds")
+      infolog.Println("Reconnect in 5 seconds")
       time.Sleep(time.Second * 5)
     }
   }
@@ -140,8 +139,8 @@ func packetHandler(packetData []byte) {
     errlog.Println(err)
     return
   }
-  fmt.Printf("SENDING:")
-  packet.Print()
+  infolog.Printf("SENDING TO PROXY:")
+  packet.Print(100)
 
   _, err = io.Copy(serverConnection, bytes.NewReader(packetData))
   if err != nil {
@@ -161,7 +160,7 @@ func main() {
   }
 
   if len(os.Args) != 2 {
-    fmt.Printf("Usage: %s proxy_address:port\n", filepath.Base(os.Args[0]))
+    infolog.Printf("Usage: %s proxy_address:port\n", filepath.Base(os.Args[0]))
     os.Exit(1)
   }
 
@@ -177,7 +176,7 @@ func main() {
 
   go keepConnectedTo(serverAddr)
 
-  fmt.Println("Traffic diverted.")
+  infolog.Println("Traffic diverted.")
 
   exitChan := atFire.GetFireSignalsChannel()
   <-exitChan

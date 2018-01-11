@@ -2,10 +2,9 @@ package proxyDivert
 
 import (
   "net"
-  "log"
   "math"
   "os"
-  "fmt"
+  "log"
   //"golang.org/x/net/ipv4"
   "github.com/coreos/go-iptables/iptables"
   "syscall"
@@ -26,8 +25,8 @@ var errlog = log.New(os.Stderr,
     "ERROR: ",
     log.Lshortfile)
 
-var outlog = log.New(os.Stdout,
-    "INFO: ", 0)
+var infolog = log.New(os.Stdout,
+    "", 0)
 
 type realAddr struct {
   realIP string
@@ -83,12 +82,12 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
     packets, ok := PORT_TO_QUEUE[srcPort]
     if ok {
       delete(PORT_TO_QUEUE, srcPort)
-      fmt.Println("Processing QUEUE")
+      infolog.Println("Processing QUEUE")
       for _, packet := range packets {
         processPacket(packet)
       }
     } else {
-      fmt.Printf("Queue is empty for %d\n", srcPort)
+      infolog.Printf("Queue is empty for %d\n", srcPort)
     }
 
   }
@@ -100,36 +99,37 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
       errlog.Println(err)
       return
     }
-    fmt.Println("PROCESS FOR SENDING:")
-    packet.Print()
+    infolog.Println("RECEIVED RAW PACKET:")
+    packet.Print(100)
 
     ip := packet.IP
     tcp := packet.TCP
 
-    dst := ip.DstIP.String()
-    src := ip.SrcIP.String()
+    dstIP := ip.DstIP.String()
+    srcIP := ip.SrcIP.String()
 
-    if dst != internalIP {
-      fmt.Printf("%s not internal %s\n", dst, internalIP)
+    if dstIP != internalIP {
+      infolog.Printf("%s not internal %s\n", dstIP, internalIP)
       return
     }
 
     srcPort := uint16(tcp.SrcPort)
 
-    fmt.Printf("Checking port %d\n", srcPort)
+    infolog.Printf("Checking port %d\n", srcPort)
     rly, ok := PORT_TO_DST[srcPort]
     if !ok {
-      fmt.Println("NOT ACCEPTED YET")
+      infolog.Println("NOT ACCEPTED YET")
       if tcp.SYN {
         PORT_TO_QUEUE[srcPort] = append(PORT_TO_QUEUE[srcPort], packetData)
       } else {
-        fmt.Printf("%s:%d not in ports\n", dst, tcp.DstPort)
+        infolog.Printf("%s:%d not in ports\n", srcIP, tcp.SrcPort)
         //os.Exit(1)
       }
       return
     }
 
     if len(tcp.Payload) == 0 && !tcp.SYN {
+      infolog.Println("No payload and not SYN")
       return
     }
 
@@ -142,15 +142,15 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
     if (ip.SrcIP.Equal(rlyIP)) {
       // It's reply from target, inbound packet
       // Already injected.
+      infolog.Println("This packet is an inbound reply, already handled.")
       return
     } else {
       ip.DstIP = rlyIP
       tcp.DstPort = layers.TCPPort(rlyPort)
     }
 
-    src = fmt.Sprintf("%s:%d", ip.SrcIP.String(), tcp.SrcPort)
-    dst = fmt.Sprintf("%s:%d", ip.DstIP.String(), tcp.DstPort)
-    fmt.Printf("From %s to %s (recompiled)\n", src, dst)
+    //src := infolog.Sprintf("%s:%d", ip.SrcIP.String(), tcp.SrcPort)
+    //dst := infolog.Sprintf("%s:%d", ip.DstIP.String(), tcp.DstPort)
 
     modPacket, err := packet.Recompile()
     if err != nil {
@@ -164,11 +164,11 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
 
   ipConn, err := net.ListenIP("ip:tcp", &net.IPAddr{IP: net.ParseIP(internalIP)})
   if err != nil {
-    fmt.Println("Try running under root rights.")
+    infolog.Println("Try running under root rights.")
     errlog.Fatal(err)
   }
 
-  log.Println("Listening!")
+  infolog.Println("Listening!")
   maxIPPacketSize := math.MaxUint16
 
   go func(){
@@ -206,13 +206,13 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
         continue
       }
       remoteStr := iptConnection.RemoteAddr().String()
-      fmt.Printf("Connection from %s to %s accepted\n", la.String(), remoteStr)
+      infolog.Printf("Connection from %s to %s accepted\n", la.String(), remoteStr)
 
       go func(){
 
         defer iptConnection.Close()
         ipv4, port, newConn, err := getOriginalDst(iptConnection)
-        // fmt.Println( la.String(), fmt.Sprintf("%s:%d", ipv4, port) )
+        // infolog.Println( la.String(), infolog.Sprintf("%s:%d", ipv4, port) )
 
         iptConnection = newConn
         if err != nil {
@@ -236,7 +236,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
           sourcePort: srcPort,
           iptConnection: iptConnection,
         }
-        fmt.Printf("Added source port %d\n", uint16(sourcePort))
+        infolog.Printf("Added source port %d\n", uint16(sourcePort))
         sendQueuePacketsFor(srcPort)
 
       }()
@@ -255,7 +255,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
 
     rly, ok := PORT_TO_DST[uint16(tcp.DstPort)]
     if !ok {
-      fmt.Printf("%s:%d not in ports\n", ip.DstIP.String(), tcp.DstPort)
+      infolog.Printf("%s:%d not in ports\n", ip.DstIP.String(), tcp.DstPort)
       os.Exit(1)
     }
 
@@ -286,7 +286,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
     }
     return func() error {
 
-      fmt.Println("Restoring Internet settings!")
+      infolog.Println("Restoring Internet settings!")
       return ipt.Delete(table, chain, args...)
 
     }, nil
@@ -301,7 +301,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
     }
     ip := ipsports[0].ips[0]
     negs = []string{"!", "-d", ip}
-    fmt.Println("NEGS", negs)
+    infolog.Println("NEGS", negs)
   }
 
   args := []string{"-p", "tcp", "-m", "tcp", "-j", "DNAT", "--dport", "80", "--to-destination", "127.0.0.5:2222"}
@@ -315,7 +315,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
   go func(){
     for _ = range fire {
       unsub()
-      fmt.Println("Exiting after signal.")
+      infolog.Println("Exiting after signal.")
     }
   }()
 

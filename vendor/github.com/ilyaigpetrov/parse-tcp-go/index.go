@@ -9,6 +9,7 @@ import (
   "strings"
   "math"
   "encoding/hex"
+  "bytes"
 )
 
 type Packet struct {
@@ -55,9 +56,25 @@ func ParseTCPPacket(packetData []byte) (packet Packet, err error) {
     return newBuffer.Bytes(), nil
 
   }
+
+
+  toChar := func(b byte) rune {
+    if b < 32 || b > 126 {
+      return rune('.')
+    }
+    return rune(b)
+  }
+  toString := func(data []byte) string {
+    var buffer bytes.Buffer
+    for _, d := range data {
+      buffer.WriteRune(toChar(d))
+    }
+    return buffer.String()
+  }
+
   packet.Print = func(payloadLimits ...int) {
 
-    fmt.Printf("Packet from %s:%d to %s:%d %d", ip.SrcIP.String(), tcp.SrcPort, ip.DstIP.String(), tcp.DstPort, tcp.Seq)
+    fmt.Printf("Packet from %s:%d to %s:%d seq=%d ack=%d", ip.SrcIP.String(), tcp.SrcPort, ip.DstIP.String(), tcp.DstPort, tcp.Seq, tcp.Ack)
     flags := strings.Split("FIN SYN RST PSH ACK URG ECE CWR NS", " ")
     for _, flag := range flags {
       val, err := reflections.GetField(tcp, flag)
@@ -69,12 +86,12 @@ func ParseTCPPacket(packetData []byte) (packet Packet, err error) {
       }
     }
     fmt.Printf("\n")
-    payloadLimit := 1000
+    payloadLimit := 100
     if len(payloadLimits) > 0 {
       payloadLimit = payloadLimits[0]
     }
     if len(tcp.Payload) != 0 {
-      fmt.Println("TCP PAYLOAD:", string(tcp.Payload[:int(math.Min(float64(len(tcp.Payload)), float64(payloadLimit)))]))
+      fmt.Println("TCP PAYLOAD:", toString(tcp.Payload[:int(math.Min(float64(len(tcp.Payload)), float64(payloadLimit)))]))
     }
   }
 
