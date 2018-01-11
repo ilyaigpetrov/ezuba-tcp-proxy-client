@@ -23,7 +23,7 @@
   branch = "master"
   name = "github.com/ilyaigpetrov/parse-tcp-go"
   packages = ["."]
-  revision = "210a0c10359a6dcc8485f8fe0fa367eabc5da494"
+  revision = "93ceddc6c7a74c7c561b4d2b65f52bb3b9520f68"
 
 [[projects]]
   branch = "master"
@@ -34,14 +34,20 @@
 [[projects]]
   branch = "master"
   name = "golang.org/x/net"
-  packages = ["bpf","internal/iana","internal/socket","ipv4"]
-  revision = "434ec0c7fe3742c984919a691b2018a6e9694425"
+  packages = ["bpf","http2","http2/hpack","idna","internal/iana","internal/socket","ipv4","lex/httplex"]
+  revision = "ab555f366c4508dbe0802550b1b20c46c5c18aa0"
 
 [[projects]]
   branch = "master"
   name = "golang.org/x/sys"
   packages = ["windows"]
-  revision = "d38bf781f16e180a1b2ad82697d2f81d7b7ecfac"
+  revision = "810d7000345868fc619eb81f46307107118f4ae1"
+
+[[projects]]
+  branch = "master"
+  name = "golang.org/x/text"
+  packages = ["collate","collate/build","internal/colltab","internal/gen","internal/tag","internal/triegen","internal/ucd","language","secure/bidirule","transform","unicode/bidi","unicode/cldr","unicode/norm","unicode/rangetable"]
+  revision = "e19ae1496984b1c655b8044a65c0300a3c878dd3"
 
 [[projects]]
   name = "gopkg.in/oleiade/reflections.v1"
@@ -52,6 +58,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "677e4bedb5211af54f9ba6036f0020a59c3629579420b46d51f198bff19d3981"
+  inputs-digest = "7a90b88421a5b0e7cea2082e987231bb3d6c5a3007c774c051db0b45d5c65112"
   solver-name = "gps-cdcl"
   solver-version = 1
