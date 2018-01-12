@@ -34,10 +34,18 @@ type realAddr struct {
   sourceIP string
   sourcePort uint16
   iptConnection *net.TCPConn
+  initialSequence uint32
+}
+
+type TCPInits struct {
+  synackSeq uint32
+  seqDiff uint32
+  syn []byte
+  packetQueue [][]byte
 }
 
 var PORT_TO_DST = make(map[uint16]realAddr)
-var PORT_TO_QUEUE = make(map[uint16][][]byte)
+var PORT_TO_INITS = make(map[uint16]TCPInits)
 
 func closeConnection(srcPort uint16) {
 
@@ -46,7 +54,7 @@ func closeConnection(srcPort uint16) {
     rly.iptConnection.Close()
   }
   delete(PORT_TO_DST, srcPort)
-  delete(PORT_TO_QUEUE, srcPort)
+  delete(PORT_TO_INITS, srcPort)
 
 }
 
@@ -75,24 +83,26 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
   internalIP := "127.0.0.5"
   port := 2222
 
-  var processPacket func([]byte)
+  var processPacketData func([]byte)
 
-  sendQueuePacketsFor := func(srcPort uint16) {
+  /*
+  processSynAckFor := func(srcPort uint16) {
 
-    packets, ok := PORT_TO_QUEUE[srcPort]
+    synack, ok := PORT_TO_SYNACK[srcPort]
     if ok {
-      delete(PORT_TO_QUEUE, srcPort)
-      infolog.Println("Processing QUEUE")
+      delete(PORT_TO_SYNACK, srcPort)
+      infolog.Println("Processing synack")
       for _, packet := range packets {
-        processPacket(packet)
+        processPacketData(packet)
       }
     } else {
       infolog.Printf("Queue is empty for %d\n", srcPort)
     }
 
   }
+  */
 
-  processPacket = func(packetData []byte) {
+  processPacketData = func(packetData []byte) {
 
     packet, err := parseTCP.ParseTCPPacket(packetData)
     if err != nil {
@@ -115,33 +125,40 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
 
     srcPort := uint16(tcp.SrcPort)
 
+    if tcp.SYN && !tcp.FIN {
+      _, ok := PORT_TO_INITS[srcPort]
+      if !ok {
+        PORT_TO_INITS[srcPort] = TCPInits{}
+        inits := PORT_TO_INITS[srcPort]
+        if tcp.ACK {
+          inits.synackSeq = tcp.Seq
+          infolog.Printf("Saved sequence number %d\n", tcp.Seq)
+        } else {
+          inits.syn = packetData
+          infolog.Println("Saved SYN packet")
+        }
+        return
+      }
+    }
+
     infolog.Printf("Checking port %d\n", srcPort)
     rly, ok := PORT_TO_DST[srcPort]
     if !ok {
-      infolog.Println("NOT ACCEPTED YET")
-      if tcp.SYN {
-        PORT_TO_QUEUE[srcPort] = append(PORT_TO_QUEUE[srcPort], packetData)
-      } else {
-        infolog.Printf("%s:%d not in ports\n", srcIP, tcp.SrcPort)
-        //os.Exit(1)
-      }
+      infolog.Printf("%s:%d not in ports YET, queueing\n", srcIP, tcp.SrcPort)
+      inits := PORT_TO_INITS[srcPort]
+      inits.packetQueue = append(inits.packetQueue, packetData)
       return
     }
 
-    if len(tcp.Payload) == 0 && !tcp.SYN {
-      infolog.Println("No payload and not SYN")
-      return
-    }
-
-    sendQueuePacketsFor(srcPort)
+    // sendSynPacketFor(srcPort)
 
     rlyStr := rly.realIP
     rlyPort := rly.realPort
     rlyIP := net.ParseIP(rlyStr)
 
     if (ip.SrcIP.Equal(rlyIP)) {
-      // It's reply from target, inbound packet
-      // Already injected.
+      // It's reply from target, inbound packet.
+      // Must be injected after reading from proxy connection.
       infolog.Println("This packet is an inbound reply, already handled.")
       return
     } else {
@@ -181,7 +198,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
       }
       packetData := ipBuf[:n]
 
-      processPacket(packetData)
+      processPacketData(packetData)
 
     }
   }()
@@ -237,7 +254,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
           iptConnection: iptConnection,
         }
         infolog.Printf("Added source port %d\n", uint16(sourcePort))
-        sendQueuePacketsFor(srcPort)
+        // sendSynPacketFor(srcPort)
 
       }()
     }
@@ -257,13 +274,6 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
     if !ok {
       infolog.Printf("%s:%d not in ports\n", ip.DstIP.String(), tcp.DstPort)
       os.Exit(1)
-    }
-
-    if len(tcp.Payload) > 0 {
-      _, err = rly.iptConnection.Write(tcp.Payload)
-      if err != nil {
-        errlog.Println(err)
-      }
     }
 
     if tcp.FIN || tcp.RST {

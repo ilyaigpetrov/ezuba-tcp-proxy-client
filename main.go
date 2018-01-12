@@ -25,13 +25,6 @@ var errlog = log.New(os.Stderr,
 var infolog = log.New(os.Stdout,
     "", log.Lshortfile)
 
-func xor42(data []byte) []byte {
-  for i, b := range data {
-    data[i] = b ^ 42
-  }
-  return data
-}
-
 var serverConnection net.Conn
 var isDisconnected = make(chan struct{})
 var isConnected = make(chan struct{}, 1)
@@ -51,11 +44,11 @@ func keepHandlingReply() {
           infolog.Println("read error:", err)
           isDisconnected <- struct{}{}
           <-isConnected
+          continue
         }
         infolog.Println("EOF")
         return
       }
-      //xor42(tmp[:n])
       buf = append(buf, tmp[:n]...)
 
       header, err := ipv4.ParseHeader(buf)
@@ -69,7 +62,6 @@ func keepHandlingReply() {
       }
       if (header.TotalLen > len(buf)) {
         infolog.Printf("Reading more up to %d\n", header.TotalLen)
-        //infolog.Println("CURRENT:", hex.Dump(buf))
         continue
       }
       packetData := buf[0:header.TotalLen]
