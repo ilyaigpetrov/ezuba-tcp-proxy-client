@@ -38,23 +38,25 @@ type realAddr struct {
 }
 
 type TCPInits struct {
-  synackSeq uint32
+  hostSeq uint32
   seqDiff uint32
-  syn []byte
-  packetQueue [][]byte
+  synPacket parseTCP.Packet
+  ackPacket parseTCP.Packet
+  otherPacketsQueue [][]byte
 }
 
-var PORT_TO_DST = make(map[uint16]realAddr)
-var PORT_TO_INITS = make(map[uint16]TCPInits)
+var PORT_TO_DST sync.Map //= make(map[uint16]realAddr)
+var PORT_TO_INITS sync.Map //= make(map[uint16]TCPInits)
+var NOT_INITED_PORT_TO_BOOL sync.Map //= make([]uint16)
 
 func closeConnection(srcPort uint16) {
 
-  rly := PORT_TO_DST[srcPort]
+  rly := PORT_TO_DST.Load(srcPort)
   if rly.iptConnection != nil {
     rly.iptConnection.Close()
   }
-  delete(PORT_TO_DST, srcPort)
-  delete(PORT_TO_INITS, srcPort)
+  PORT_TO_DST.Delete(srcPort)
+  PORT_TO_INITS.Delete(srcPort)
 
 }
 
@@ -78,6 +80,8 @@ func sendViaSocket(packetData []byte, toIP net.IP, port int) error {
 
 }
 
+var initMutex sync.Mutex
+
 func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (unsub func() error, injectPacket func([]byte) error, err error) {
 
   internalIP := "127.0.0.5"
@@ -85,8 +89,26 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
 
   var processPacketData func([]byte)
 
-  /*
-  processSynAckFor := func(srcPort uint16) {
+  tryInitingPort := func(srcPort uint16) {
+
+    initMutex.Lock()
+    for {
+      _, ok := NOT_INITED_PORT_TO_BOOL.Load(srcPort)
+      if !ok {
+        break
+      }
+      inits, ok := PORT_TO_INITS.Load(scrPort)
+      if !ok {
+        break
+      }
+      if len(inits.packetQueue) < 2 {
+        break
+      }
+      ackPacket := inits.ackPacket
+      inits.hostSeq = ackPacket.Ack - 1
+      break
+    }
+    initMutex.Unlock()
 
     synack, ok := PORT_TO_SYNACK[srcPort]
     if ok {
@@ -100,7 +122,6 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
     }
 
   }
-  */
 
   processPacketData = func(packetData []byte) {
 
@@ -111,6 +132,11 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
     }
     infolog.Println("RECEIVED RAW PACKET:")
     packet.Print(100)
+    processPacket(packet)
+
+  }
+
+  processPacket = func(packet parseTCP.Packet) {
 
     ip := packet.IP
     tcp := packet.TCP
@@ -125,27 +151,36 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
 
     srcPort := uint16(tcp.SrcPort)
 
-    if tcp.SYN && !tcp.FIN {
-      _, ok := PORT_TO_INITS[srcPort]
-      if !ok {
-        PORT_TO_INITS[srcPort] = TCPInits{}
-        inits := PORT_TO_INITS[srcPort]
-        if tcp.ACK {
-          inits.synackSeq = tcp.Seq
-          infolog.Printf("Saved sequence number %d\n", tcp.Seq)
-        } else {
-          inits.syn = packetData
-          infolog.Println("Saved SYN packet")
-        }
-        return
+    if tcp.SYN {
+      inits, ok := PORT_TO_INITS[srcPort]
+      if ok {
+        errlog.Fatal("Second SYN packet for port %d\n", srcPort)
       }
     }
 
+    if ifNoPayload && !tcp.FIN {
+      if ok && inits.
+
+      if !ok {
+        PORT_TO_INITS[srcPort] = TCPInits{}
+        inits := PORT_TO_INITS[srcPort]
+      }
+      if tcp.ACK {
+        inits.synackSeq = tcp.Seq
+        infolog.Printf("Saved sequence number %d\n", tcp.Seq)
+      if tcp.SYN {
+        inits.syn = packetData
+        infolog.Println("Saved SYN packet")
+        return
+      }
+    }
+    */
+
     infolog.Printf("Checking port %d\n", srcPort)
-    rly, ok := PORT_TO_DST[srcPort]
+    rly, ok := PORT_TO_DST.Load(srcPort)
     if !ok {
       infolog.Printf("%s:%d not in ports YET, queueing\n", srcIP, tcp.SrcPort)
-      inits := PORT_TO_INITS[srcPort]
+      inits := PORT_TO_INITS.Load(srcPort)
       inits.packetQueue = append(inits.packetQueue, packetData)
       return
     }
@@ -246,15 +281,29 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
 
         srcPort := uint16(sourcePort)
 
-        PORT_TO_DST[uint16(sourcePort)] = realAddr{
+        PORT_TO_DST.Store(srcPort, realAddr{
           realIP: ipv4,
           realPort: port,
           sourceIP: sourceIP,
           sourcePort: srcPort,
           iptConnection: iptConnection,
         }
-        infolog.Printf("Added source port %d\n", uint16(sourcePort))
-        // sendSynPacketFor(srcPort)
+        infolog.Printf("Added source port %d\n", srcPort)
+
+        NOT_INITED_PORT_TO_BOOL.Store(srcPort, true)
+        tryInitingPort(srcPort)
+
+        go func() {
+          defer closeConnection(srcPort)
+          packetBuffer := make([]byte, 65535)
+          for {
+            n, err := iptConnection.Read(packetBuffer)
+            if err != nil {
+              break
+            }
+            infolog.Printf("Read %d bytes from iptables", n)
+          }
+        }()
 
       }()
     }
@@ -270,7 +319,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
     ip := packet.IP
     tcp := packet.TCP
 
-    rly, ok := PORT_TO_DST[uint16(tcp.DstPort)]
+    _, ok := PORT_TO_DST.Load(uint16(tcp.DstPort))
     if !ok {
       infolog.Printf("%s:%d not in ports\n", ip.DstIP.String(), tcp.DstPort)
       os.Exit(1)
