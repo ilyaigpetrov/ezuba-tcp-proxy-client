@@ -2,7 +2,6 @@ package proxyDivert
 
 import (
   "net"
-  "math"
   "os"
   "log"
   //"golang.org/x/net/ipv4"
@@ -169,7 +168,7 @@ func SubscribeToPacketsExcept(exceptions []string, packetHandler func([]byte)) (
   }
 
   infolog.Println("Listening!")
-  maxIPPacketSize := math.MaxUint16
+  maxIPPacketSize := 65535
 
   go func(){
     for {

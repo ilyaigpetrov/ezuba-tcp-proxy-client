@@ -3,16 +3,22 @@ package main
 import (
 
   "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/proxy-divert"
-  "golang.org/x/net/ipv4"
+
   "path/filepath"
   "log"
+  "fmt"
   "time"
   "bytes"
   "runtime"
   "os"
   "io"
-  //"encoding/hex"
-  "net"
+  "crypto/tls"
+  "encoding/hex"
+  "sync"
+  "net/http"
+
+  "golang.org/x/net/ipv4"
+  "golang.org/x/net/http2"
 
   "github.com/ilyaigpetrov/parse-tcp-go"
   "github.com/ilyaigpetrov/ezuba-tcp-proxy-client/at-fire"
@@ -25,27 +31,65 @@ var errlog = log.New(os.Stderr,
 var infolog = log.New(os.Stdout,
     "", log.Lshortfile)
 
-func xor42(data []byte) []byte {
-  for i, b := range data {
-    data[i] = b ^ 42
-  }
-  return data
+// TLS SNIFFER
+
+type proxyConn struct {
+  tls.Conn
 }
 
-var serverConnection net.Conn
+func (w *proxyConn) Read(b []byte) (n int, err error) {
+  n, err = w.Conn.Read(b)
+  infolog.Println("READ:", string(b))
+  return
+}
+
+func (w *proxyConn) Write(b []byte) (n int, err error) {
+  n, err = w.Conn.Write(b)
+  infolog.Println("WRITE:", string(b))
+  return
+}
+
+
+var serverConnection *http2.ClientConn
+var proxyServer string
+
+// SAFE BUFFER
+
+type SafeBuffer struct {
+    b bytes.Buffer
+    m sync.Mutex
+}
+func (b *SafeBuffer) Read(p []byte) (n int, err error) {
+    b.m.Lock()
+    defer b.m.Unlock()
+    return b.b.Read(p)
+}
+func (b *SafeBuffer) Write(p []byte) (n int, err error) {
+    b.m.Lock()
+    defer b.m.Unlock()
+    return b.b.Write(p)
+}
+func (b *SafeBuffer) String() string {
+    b.m.Lock()
+    defer b.m.Unlock()
+    return b.b.String()
+}
+
+var bufferToProxy *SafeBuffer
+
 var isDisconnected = make(chan struct{})
 var isConnected = make(chan struct{}, 1)
 
 var injectPacket func([]byte) error
 
-func keepHandlingReply() {
+func keepHandlingReply(body io.ReadCloser) {
 
-  defer serverConnection.Close()
+  defer body.Close()
   for {
     buf := make([]byte, 0, 65535) // big buffer
     tmp := make([]byte, 4096)     // using small tmp buffer for demonstrating
     for {
-      n, err := serverConnection.Read(tmp)
+      n, err := body.Read(tmp)
       if err != nil {
         if err != io.EOF {
           infolog.Println("read error:", err)
@@ -53,9 +97,9 @@ func keepHandlingReply() {
           <-isConnected
         }
         infolog.Println("EOF")
+        fmt.Println(hex.Dump(buf))
         return
       }
-      //xor42(tmp[:n])
       buf = append(buf, tmp[:n]...)
 
       header, err := ipv4.ParseHeader(buf)
@@ -64,7 +108,7 @@ func keepHandlingReply() {
         return
       }
       if header.TotalLen == 0 && len(buf) > 0 {
-        infolog.Println("Buffer is not parserable!")
+        errlog.Println("Buffer is not parserable!")
         os.Exit(1)
       }
       if (header.TotalLen > len(buf)) {
@@ -77,6 +121,7 @@ func keepHandlingReply() {
 
       packet, err := parseTCP.ParseTCPPacket(packetData)
       if err != nil {
+        fmt.Println(hex.Dump(packetData))
         panic(err)
       }
       packet.Print(100)
@@ -91,19 +136,40 @@ func keepHandlingReply() {
 
 func connectTo(serverPoint string) (ifConnected bool) {
 
-  infolog.Printf("Dialing %s\n...", serverPoint)
-  var err error
-  if serverConnection != nil {
-    serverConnection.Close()
-    // serverConnection = nil
-  }
-  infolog.Println("REMOTE REDEFINED")
-  serverConnection, err = net.Dial("tcp", serverPoint)
+  cfg := new(tls.Config)
+  cfg.NextProtos = append([]string{"h2"}, cfg.NextProtos...)
+
+  front := "www.google.com:443"
+
+  tlsConn, err := tls.Dial("tcp", front, cfg)
   if err != nil {
-    infolog.Println("Can't connect to the server!")
-    return false
+    panic(err)
   }
-  infolog.Println("Connected!")
+  sniffedTls := tlsConn //&proxyConn{*tlsConn}
+
+  transport := &http2.Transport{}
+  serverConnection, err = transport.NewClientConn(sniffedTls)
+  if err != nil {
+    panic(err)
+  }
+
+  bufferToProxy = &SafeBuffer{}
+
+  userSecret := "super-random-key"
+
+  req, err := http.NewRequest("POST", "/iptables?user-secret=" + userSecret, bufferToProxy)
+  if err != nil {
+    infolog.Println(err)
+    return
+  }
+  req.Host = proxyServer
+  fmt.Printf("REQ: %v + %s\n", req, req.Host)
+  resp, err := serverConnection.RoundTrip(req)
+  if err != nil {
+    errlog.Println(err)
+    return
+  }
+  go keepHandlingReply(resp.Body)
   isConnected <- struct{}{}
   return true
 
@@ -115,7 +181,6 @@ func keepConnectedTo(serverPoint string) {
     errlog.Fatal("Failed to stick to this server.")
   }
   <-isConnected
-  go keepHandlingReply()
   for _ = range isDisconnected {
     for {
       ok := connectTo(serverPoint)
@@ -130,9 +195,6 @@ func keepConnectedTo(serverPoint string) {
 }
 
 func packetHandler(packetData []byte) {
-  if serverConnection == nil {
-    return
-  }
 
   packet, err := parseTCP.ParseTCPPacket(packetData)
   if err != nil {
@@ -142,7 +204,7 @@ func packetHandler(packetData []byte) {
   infolog.Printf("SENDING TO PROXY:")
   packet.Print(100)
 
-  _, err = io.Copy(serverConnection, bytes.NewReader(packetData))
+  _, err = bufferToProxy.Write(packetData)
   if err != nil {
     errlog.Println(err)
     isDisconnected <- struct{}{}
@@ -160,21 +222,22 @@ func main() {
   }
 
   if len(os.Args) != 2 {
-    infolog.Printf("Usage: %s proxy_address:port\n", filepath.Base(os.Args[0]))
+    infolog.Printf("Usage: %s example.appspot.com\n", filepath.Base(os.Args[0]))
     os.Exit(1)
   }
 
-  serverAddr := os.Args[1]
+  proxyServer = os.Args[1]
 
   var unsub func() error
   var err error
-  unsub, injectPacket, err = proxyDivert.SubscribeToPacketsExcept([]string{serverAddr}, packetHandler)
+  unsub, injectPacket, err = proxyDivert.SubscribeToPacketsExcept([]string{proxyServer + ":443"}, packetHandler)
+  defer unsub()
   if err != nil {
     errlog.Fatal(err)
+    return
   }
-  defer unsub()
 
-  go keepConnectedTo(serverAddr)
+  go keepConnectedTo(proxyServer)
 
   infolog.Println("Traffic diverted.")
 
