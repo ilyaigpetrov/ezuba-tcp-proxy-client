@@ -89,6 +89,7 @@ func keepHandlingReply(body io.ReadCloser) {
     buf := make([]byte, 0, 65535) // big buffer
     tmp := make([]byte, 4096)     // using small tmp buffer for demonstrating
     for {
+      log.Println("Reading body cycle")
       n, err := body.Read(tmp)
       if err != nil {
         if err != io.EOF {
@@ -122,7 +123,7 @@ func keepHandlingReply(body io.ReadCloser) {
       packet, err := parseTCP.ParseTCPPacket(packetData)
       if err != nil {
         fmt.Println(hex.Dump(packetData))
-        panic(err)
+        errlog.Fatal(err)
       }
       packet.Print(100)
 
@@ -143,14 +144,14 @@ func connectTo(serverPoint string) (ifConnected bool) {
 
   tlsConn, err := tls.Dial("tcp", front, cfg)
   if err != nil {
-    panic(err)
+    errlog.Fatal(err)
   }
   sniffedTls := tlsConn //&proxyConn{*tlsConn}
 
   transport := &http2.Transport{}
   serverConnection, err = transport.NewClientConn(sniffedTls)
   if err != nil {
-    panic(err)
+    errlog.Fatal(err)
   }
 
   bufferToProxy = &SafeBuffer{}
@@ -163,6 +164,10 @@ func connectTo(serverPoint string) (ifConnected bool) {
     return
   }
   req.Host = proxyServer
+  req.Proto = "HTTP/2"
+  req.URL.Scheme = "https"
+
+  infolog.Printf("Proxy server is !%s!", proxyServer)
   fmt.Printf("REQ: %v + %s\n", req, req.Host)
   resp, err := serverConnection.RoundTrip(req)
   if err != nil {
